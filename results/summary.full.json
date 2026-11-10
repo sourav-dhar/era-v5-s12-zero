@@ -1,0 +1,606 @@
+{
+ "profile": "full",
+ "world": 32,
+ "steps": 100,
+ "torch": "2.15.0+cpu",
+ "collectives": [
+  {
+   "mode": "mailbox",
+   "max |RS slice \u2212 exact sum|": 1.0658141036401503e-14,
+   "RS\u2192AG == all-reduce (bits)": true,
+   "all ranks identical (bits)": true,
+   "RS bytes sent / tensor": 0.96875,
+   "AG bytes sent / tensor": 0.96875,
+   "all-reduce bytes / tensor": 1.9375,
+   "wall (s)": 0.59
+  },
+  {
+   "mode": "rendezvous",
+   "max |RS slice \u2212 exact sum|": 1.0658141036401503e-14,
+   "RS\u2192AG == all-reduce (bits)": true,
+   "all ranks identical (bits)": true,
+   "RS bytes sent / tensor": 0.96875,
+   "AG bytes sent / tensor": 0.96875,
+   "all-reduce bytes / tensor": 1.9375,
+   "wall (s)": 0.12
+  }
+ ],
+ "psi": 818241,
+ "psi_padded": 820224,
+ "same_model": [
+  {
+   "arrangement": "DDP",
+   "final loss": 2.3402779698371887,
+   "loss == DDP at every step": true,
+   "fp32 master == DDP (all bits)": true,
+   "bf16 weights == DDP (all bits)": true,
+   "wall (s)": 401
+  },
+  {
+   "arrangement": "ZeRO-1",
+   "final loss": 2.3402779698371887,
+   "loss == DDP at every step": true,
+   "fp32 master == DDP (all bits)": true,
+   "bf16 weights == DDP (all bits)": true,
+   "wall (s)": 269
+  },
+  {
+   "arrangement": "ZeRO-2",
+   "final loss": 2.3402779698371887,
+   "loss == DDP at every step": true,
+   "fp32 master == DDP (all bits)": true,
+   "bf16 weights == DDP (all bits)": true,
+   "wall (s)": 262
+  },
+  {
+   "arrangement": "ZeRO-3",
+   "final loss": 2.3402779698371887,
+   "loss == DDP at every step": true,
+   "fp32 master == DDP (all bits)": true,
+   "bf16 weights == DDP (all bits)": true,
+   "wall (s)": 287
+  }
+ ],
+ "final_loss": 2.3402779698371887,
+ "fp64_max_weight_diff": 2.4387785513812466e-15,
+ "bf16_one_gpu_loss_diff_max": 0.005720794200897217,
+ "memory": [
+  {
+   "arrangement": "DDP",
+   "weights": 2.0,
+   "grads": 2.0,
+   "master": 4.0,
+   "adam_m": 4.0,
+   "adam_v": 4.0,
+   "measured B/param": 16.0,
+   "lesson formula": 16.0,
+   "B/param (true \u03a8)": 16.038775861879323,
+   "GPU MiB": 12.515625,
+   "peak MiB": 20.987796783447266,
+   "peak during": "fwd head",
+   "CPU MiB": 0.0
+  },
+  {
+   "arrangement": "ZeRO-1",
+   "weights": 2.0,
+   "grads": 2.0,
+   "master": 0.125,
+   "adam_m": 0.125,
+   "adam_v": 0.125,
+   "measured B/param": 4.375,
+   "lesson formula": 4.375,
+   "B/param (true \u03a8)": 4.385602774732628,
+   "GPU MiB": 3.4222412109375,
+   "peak MiB": 11.894412994384766,
+   "peak during": "fwd head",
+   "CPU MiB": 0.0
+  },
+  {
+   "arrangement": "ZeRO-2",
+   "weights": 2.0,
+   "grads": 0.0625,
+   "master": 0.125,
+   "adam_m": 0.125,
+   "adam_v": 0.125,
+   "measured B/param": 2.4375,
+   "lesson formula": 2.4375,
+   "B/param (true \u03a8)": 2.4434072602081782,
+   "GPU MiB": 1.90667724609375,
+   "peak MiB": 10.378849029541016,
+   "peak during": "fwd head",
+   "CPU MiB": 0.0
+  },
+  {
+   "arrangement": "ZeRO-3",
+   "weights": 0.0625,
+   "grads": 0.0625,
+   "master": 0.125,
+   "adam_m": 0.125,
+   "adam_v": 0.125,
+   "measured B/param": 0.5,
+   "lesson formula": 0.5,
+   "B/param (true \u03a8)": 0.5012117456837288,
+   "GPU MiB": 0.39111328125,
+   "peak MiB": 8.879886627197266,
+   "peak during": "fwd head",
+   "CPU MiB": 0.0
+  },
+  {
+   "arrangement": "ZeRO-1 + offload",
+   "weights": 2.0,
+   "grads": 2.0,
+   "master": 0.0,
+   "adam_m": 0.0,
+   "adam_v": 0.0,
+   "measured B/param": 4.0,
+   "lesson formula": 4.0,
+   "B/param (true \u03a8)": 4.009693965469831,
+   "GPU MiB": 3.12890625,
+   "peak MiB": 11.601078033447266,
+   "peak during": "fwd head",
+   "CPU MiB": 0.2933349609375
+  },
+  {
+   "arrangement": "ZeRO-2 + offload",
+   "weights": 2.0,
+   "grads": 0.0625,
+   "master": 0.0,
+   "adam_m": 0.0,
+   "adam_v": 0.0,
+   "measured B/param": 2.0625,
+   "lesson formula": 2.0625,
+   "B/param (true \u03a8)": 2.0674984509453815,
+   "GPU MiB": 1.61334228515625,
+   "peak MiB": 10.085514068603516,
+   "peak during": "fwd head",
+   "CPU MiB": 0.2933349609375
+  },
+  {
+   "arrangement": "ZeRO-3 + offload",
+   "weights": 0.0625,
+   "grads": 0.0625,
+   "master": 0.0,
+   "adam_m": 0.0,
+   "adam_v": 0.0,
+   "measured B/param": 0.125,
+   "lesson formula": 0.125,
+   "B/param (true \u03a8)": 0.1253029364209322,
+   "GPU MiB": 0.0977783203125,
+   "peak MiB": 8.586551666259766,
+   "peak during": "fwd head",
+   "CPU MiB": 0.2933349609375
+  }
+ ],
+ "comm": [
+  {
+   "arrangement": "DDP",
+   "grad reduce-scatter": 0.9710977572622247,
+   "grad all-gather": 0.9710977572622247,
+   "total / P": 1.9421955145244494,
+   "excl. grad-norm, / P (padded)": 1.9375,
+   "lesson": "2P \u2248 1.9375",
+   "collective calls": 12,
+   "grad-norm all-gather": 0.0,
+   "weight all-gather": 0.0,
+   "weight all-gather (fwd)": 0.0,
+   "weight all-gather (bwd)": 0.0
+  },
+  {
+   "arrangement": "ZeRO-1",
+   "grad reduce-scatter": 0.9710977572622247,
+   "grad all-gather": 0.0,
+   "total / P": 1.9422712868213643,
+   "excl. grad-norm, / P (padded)": 1.9375,
+   "lesson": "2P \u2248 1.9375",
+   "collective calls": 13,
+   "grad-norm all-gather": 7.57722969149676e-05,
+   "weight all-gather": 0.9710977572622247,
+   "weight all-gather (fwd)": 0.0,
+   "weight all-gather (bwd)": 0.0
+  },
+  {
+   "arrangement": "ZeRO-2",
+   "grad reduce-scatter": 0.9710977572622247,
+   "grad all-gather": 0.0,
+   "total / P": 1.9422712868213643,
+   "excl. grad-norm, / P (padded)": 1.9375,
+   "lesson": "2P \u2248 1.9375",
+   "collective calls": 13,
+   "grad-norm all-gather": 7.57722969149676e-05,
+   "weight all-gather": 0.9710977572622247,
+   "weight all-gather (fwd)": 0.0,
+   "weight all-gather (bwd)": 0.0
+  },
+  {
+   "arrangement": "ZeRO-3",
+   "grad reduce-scatter": 0.9710977572622247,
+   "grad all-gather": 0.0,
+   "total / P": 2.913369044083589,
+   "excl. grad-norm, / P (padded)": 2.90625,
+   "lesson": "3P \u2248 2.9062",
+   "collective calls": 19,
+   "grad-norm all-gather": 7.57722969149676e-05,
+   "weight all-gather": 0.0,
+   "weight all-gather (fwd)": 0.9710977572622247,
+   "weight all-gather (bwd)": 0.9710977572622247
+  }
+ ],
+ "work": [
+  {
+   "arrangement": "DDP",
+   "fwd+bwd GFLOP / GPU / step": 1.338179584,
+   "parameters updated by GPU 0": 820224,
+   "fraction of model": 1.0,
+   "CPU ms in forward / step": 472.40997328000043,
+   "CPU ms in backward / step": 263.2393143300023,
+   "CPU ms in optimizer / step": 113.66233847999887
+  },
+  {
+   "arrangement": "ZeRO-1",
+   "fwd+bwd GFLOP / GPU / step": 1.338179584,
+   "parameters updated by GPU 0": 25632,
+   "fraction of model": 0.03125,
+   "CPU ms in forward / step": 506.62499215000935,
+   "CPU ms in backward / step": 268.8430824299991,
+   "CPU ms in optimizer / step": 88.34309239000162
+  },
+  {
+   "arrangement": "ZeRO-2",
+   "fwd+bwd GFLOP / GPU / step": 1.338179584,
+   "parameters updated by GPU 0": 25632,
+   "fraction of model": 0.03125,
+   "CPU ms in forward / step": 500.85470474003046,
+   "CPU ms in backward / step": 265.3902295799935,
+   "CPU ms in optimizer / step": 81.15349407999247
+  },
+  {
+   "arrangement": "ZeRO-3",
+   "fwd+bwd GFLOP / GPU / step": 1.338179584,
+   "parameters updated by GPU 0": 25632,
+   "fraction of model": 0.03125,
+   "CPU ms in forward / step": 511.57550114001873,
+   "CPU ms in backward / step": 276.3567200800162,
+   "CPU ms in optimizer / step": 92.66007617998072
+  }
+ ],
+ "timing": [
+  {
+   "card": "H100",
+   "arrangement": "DDP",
+   "overlap": false,
+   "compute \u00b5s": 193.71235795454544,
+   "optimizer \u00b5s": 6.855603582089552,
+   "network adds \u00b5s": 63.56736000000398,
+   "step \u00b5s": 264.13532153663897,
+   "network / compute": 0.32815335413407154
+  },
+  {
+   "card": "H100",
+   "arrangement": "DDP",
+   "overlap": true,
+   "compute \u00b5s": 193.71235795454544,
+   "optimizer \u00b5s": 6.855603582089552,
+   "network adds \u00b5s": 16.705280000002325,
+   "step \u00b5s": 217.27324153663733,
+   "network / compute": 0.0862375543635797
+  },
+  {
+   "card": "H100",
+   "arrangement": "ZeRO-1",
+   "overlap": false,
+   "compute \u00b5s": 193.71235795454544,
+   "optimizer \u00b5s": 0.2142376119402985,
+   "network adds \u00b5s": 63.569840000007076,
+   "step \u00b5s": 257.49643556649283,
+   "network / compute": 0.32816615662137427
+  },
+  {
+   "card": "H100",
+   "arrangement": "ZeRO-1",
+   "overlap": true,
+   "compute \u00b5s": 193.71235795454544,
+   "optimizer \u00b5s": 0.2142376119402985,
+   "network adds \u00b5s": 16.70776000000082,
+   "step \u00b5s": 210.63435556648656,
+   "network / compute": 0.08625035685085869
+  },
+  {
+   "card": "H100",
+   "arrangement": "ZeRO-2",
+   "overlap": false,
+   "compute \u00b5s": 193.71235795454544,
+   "optimizer \u00b5s": 0.2142376119402985,
+   "network adds \u00b5s": 63.569840000007076,
+   "step \u00b5s": 257.49643556649283,
+   "network / compute": 0.32816615662137427
+  },
+  {
+   "card": "H100",
+   "arrangement": "ZeRO-2",
+   "overlap": true,
+   "compute \u00b5s": 193.71235795454544,
+   "optimizer \u00b5s": 0.2142376119402985,
+   "network adds \u00b5s": 16.70776000000082,
+   "step \u00b5s": 210.63435556648656,
+   "network / compute": 0.08625035685085869
+  },
+  {
+   "card": "H100",
+   "arrangement": "ZeRO-3",
+   "overlap": false,
+   "compute \u00b5s": 193.71235795454544,
+   "optimizer \u00b5s": 0.2142376119402985,
+   "network adds \u00b5s": 95.35352000000731,
+   "step \u00b5s": 289.28011556649307,
+   "network / compute": 0.49224283368840094
+  },
+  {
+   "card": "H100",
+   "arrangement": "ZeRO-3",
+   "overlap": true,
+   "compute \u00b5s": 193.71235795454544,
+   "optimizer \u00b5s": 0.2142376119402985,
+   "network adds \u00b5s": 23.50966715833009,
+   "step \u00b5s": 217.43626272481583,
+   "network / compute": 0.12136379633480392
+  },
+  {
+   "card": "B200",
+   "arrangement": "DDP",
+   "overlap": false,
+   "compute \u00b5s": 84.96156050637958,
+   "optimizer \u00b5s": 2.870784,
+   "network adds \u00b5s": 63.56736000000359,
+   "step \u00b5s": 151.39970450638316,
+   "network / compute": 0.7481896474256785
+  },
+  {
+   "card": "B200",
+   "arrangement": "DDP",
+   "overlap": true,
+   "compute \u00b5s": 84.96156050637958,
+   "optimizer \u00b5s": 2.870784,
+   "network adds \u00b5s": 20.551410132085444,
+   "step \u00b5s": 108.38375463846502,
+   "network / compute": 0.24189068573596034
+  },
+  {
+   "card": "B200",
+   "arrangement": "ZeRO-1",
+   "overlap": false,
+   "compute \u00b5s": 84.96156050637958,
+   "optimizer \u00b5s": 0.089712,
+   "network adds \u00b5s": 63.569840000004625,
+   "step \u00b5s": 148.6211125063842,
+   "network / compute": 0.7482188370967046
+  },
+  {
+   "card": "B200",
+   "arrangement": "ZeRO-1",
+   "overlap": true,
+   "compute \u00b5s": 84.96156050637958,
+   "optimizer \u00b5s": 0.089712,
+   "network adds \u00b5s": 19.030272140268266,
+   "step \u00b5s": 104.08154464664784,
+   "network / compute": 0.2239868480151012
+  },
+  {
+   "card": "B200",
+   "arrangement": "ZeRO-2",
+   "overlap": false,
+   "compute \u00b5s": 84.96156050637958,
+   "optimizer \u00b5s": 0.089712,
+   "network adds \u00b5s": 63.569840000004625,
+   "step \u00b5s": 148.6211125063842,
+   "network / compute": 0.7482188370967046
+  },
+  {
+   "card": "B200",
+   "arrangement": "ZeRO-2",
+   "overlap": true,
+   "compute \u00b5s": 84.96156050637958,
+   "optimizer \u00b5s": 0.089712,
+   "network adds \u00b5s": 19.030272140268266,
+   "step \u00b5s": 104.08154464664784,
+   "network / compute": 0.2239868480151012
+  },
+  {
+   "card": "B200",
+   "arrangement": "ZeRO-3",
+   "overlap": false,
+   "compute \u00b5s": 84.96156050637958,
+   "optimizer \u00b5s": 0.089712,
+   "network adds \u00b5s": 95.3535200000061,
+   "step \u00b5s": 180.4047925063857,
+   "network / compute": 1.12231366080954
+  },
+  {
+   "card": "B200",
+   "arrangement": "ZeRO-3",
+   "overlap": true,
+   "compute \u00b5s": 84.96156050637958,
+   "optimizer \u00b5s": 0.089712,
+   "network adds \u00b5s": 26.524554227254434,
+   "step \u00b5s": 111.57582673363402,
+   "network / compute": 0.312194762774664
+  }
+ ],
+ "topology": [
+  {
+   "layout": "1 node(s) \u00d7 32",
+   "arrangement": "DDP",
+   "network \u00b5s": 7.0630400000000035,
+   "network / compute": 0.03646148379267235
+  },
+  {
+   "layout": "1 node(s) \u00d7 32",
+   "arrangement": "ZeRO-1",
+   "network \u00b5s": 7.06331555555486,
+   "network / compute": 0.03646290629125616
+  },
+  {
+   "layout": "1 node(s) \u00d7 32",
+   "arrangement": "ZeRO-2",
+   "network \u00b5s": 7.06331555555486,
+   "network / compute": 0.03646290629125616
+  },
+  {
+   "layout": "1 node(s) \u00d7 32",
+   "arrangement": "ZeRO-3",
+   "network \u00b5s": 10.594835555555688,
+   "network / compute": 0.054693648187596595
+  },
+  {
+   "layout": "4 node(s) \u00d7 8",
+   "arrangement": "DDP",
+   "network \u00b5s": 63.56736000000398,
+   "network / compute": 0.32815335413407154
+  },
+  {
+   "layout": "4 node(s) \u00d7 8",
+   "arrangement": "ZeRO-1",
+   "network \u00b5s": 63.569840000007076,
+   "network / compute": 0.32816615662137427
+  },
+  {
+   "layout": "4 node(s) \u00d7 8",
+   "arrangement": "ZeRO-2",
+   "network \u00b5s": 63.569840000007076,
+   "network / compute": 0.32816615662137427
+  },
+  {
+   "layout": "4 node(s) \u00d7 8",
+   "arrangement": "ZeRO-3",
+   "network \u00b5s": 95.35352000000731,
+   "network / compute": 0.49224283368840094
+  },
+  {
+   "layout": "32 node(s) \u00d7 1",
+   "arrangement": "DDP",
+   "network \u00b5s": 63.567360000003596,
+   "network / compute": 0.32815335413406954
+  },
+  {
+   "layout": "32 node(s) \u00d7 1",
+   "arrangement": "ZeRO-1",
+   "network \u00b5s": 63.569840000007076,
+   "network / compute": 0.32816615662137427
+  },
+  {
+   "layout": "32 node(s) \u00d7 1",
+   "arrangement": "ZeRO-2",
+   "network \u00b5s": 63.569840000007076,
+   "network / compute": 0.32816615662137427
+  },
+  {
+   "layout": "32 node(s) \u00d7 1",
+   "arrangement": "ZeRO-3",
+   "network \u00b5s": 95.35352000000731,
+   "network / compute": 0.49224283368840094
+  }
+ ],
+ "offload": [
+  {
+   "arrangement": "ZeRO-1",
+   "GPU MiB": 3.4222412109375,
+   "CPU MiB (per GPU)": 0.0,
+   "GPU B/param": 4.385602774732628,
+   "PCIe KiB / step": 0.0,
+   "step \u00b5s (H100, overlap)": 210.63435556648656
+  },
+  {
+   "arrangement": "ZeRO-1 + offload",
+   "GPU MiB": 3.12890625,
+   "CPU MiB (per GPU)": 0.2933349609375,
+   "GPU B/param": 4.009693965469831,
+   "PCIe KiB / step": 100.125,
+   "step \u00b5s (H100, overlap)": 218.46907795454655
+  },
+  {
+   "arrangement": "ZeRO-2",
+   "GPU MiB": 1.90667724609375,
+   "CPU MiB (per GPU)": 0.0,
+   "GPU B/param": 2.4434072602081782,
+   "PCIe KiB / step": 0.0,
+   "step \u00b5s (H100, overlap)": 210.63435556648656
+  },
+  {
+   "arrangement": "ZeRO-2 + offload",
+   "GPU MiB": 1.61334228515625,
+   "CPU MiB (per GPU)": 0.2933349609375,
+   "GPU B/param": 2.0674984509453815,
+   "PCIe KiB / step": 100.125,
+   "step \u00b5s (H100, overlap)": 218.46907795454655
+  },
+  {
+   "arrangement": "ZeRO-3",
+   "GPU MiB": 0.39111328125,
+   "CPU MiB (per GPU)": 0.0,
+   "GPU B/param": 0.5012117456837288,
+   "PCIe KiB / step": 0.0,
+   "step \u00b5s (H100, overlap)": 217.43626272481583
+  },
+  {
+   "arrangement": "ZeRO-3 + offload",
+   "GPU MiB": 0.0977783203125,
+   "CPU MiB (per GPU)": 0.2933349609375,
+   "GPU B/param": 0.1253029364209322,
+   "PCIe KiB / step": 100.125,
+   "step \u00b5s (H100, overlap)": 226.1077851128757
+  }
+ ],
+ "real": [
+  {
+   "strategy": "ddp",
+   "torch": "2.15.0+cpu",
+   "params B/p": 4.0,
+   "grads B/p": 4.0,
+   "AdamW B/p": 8.0,
+   "total B/p (rank 0)": 16.0,
+   "AdamW state: max/min over ranks": 1.0,
+   "collectives": "all_reduce 1.00P",
+   "ring bytes / rank / P": 1.9375,
+   "final loss": 2.5871429443359375,
+   "max |loss \u2212 my sim|": 7.152557373046875e-07
+  },
+  {
+   "strategy": "zero1",
+   "torch": "2.15.0+cpu",
+   "params B/p": 4.0,
+   "grads B/p": 4.0,
+   "AdamW B/p": 0.6407500968541053,
+   "total B/p (rank 0)": 8.640750096854106,
+   "AdamW state: max/min over ranks": 128.0,
+   "collectives": "all_reduce 1.00P, broadcast 1.00P",
+   "ring bytes / rank / P": 2.90625,
+   "final loss": 2.5871429443359375,
+   "max |loss \u2212 my sim|": 7.152557373046875e-07
+  },
+  {
+   "strategy": "fsdp2_zero2",
+   "torch": "2.15.0+cpu",
+   "params B/p": 0.12621709251919666,
+   "grads B/p": 0.12621709251919666,
+   "AdamW B/p": 0.2524341850383933,
+   "total B/p (rank 0)": 0.5048683700767866,
+   "AdamW state: max/min over ranks": 1.0307809006707123,
+   "collectives": "all_gather_single 1.01P, reduce_scatter_single 1.01P",
+   "ring bytes / rank / P": 1.9563649340475484,
+   "final loss": 2.5871424674987793,
+   "max |loss \u2212 my sim|": 7.152557373046875e-07
+  },
+  {
+   "strategy": "fsdp2_zero3",
+   "torch": "2.15.0+cpu",
+   "params B/p": 0.12621709251919666,
+   "grads B/p": 0.12621709251919666,
+   "AdamW B/p": 0.2524341850383933,
+   "total B/p (rank 0)": 0.5048683700767866,
+   "AdamW state: max/min over ranks": 1.0307809006707123,
+   "collectives": "all_gather_single 2.02P, reduce_scatter_single 1.01P",
+   "ring bytes / rank / P": 2.9345474010713226,
+   "final loss": 2.5871424674987793,
+   "max |loss \u2212 my sim|": 7.152557373046875e-07
+  }
+ ]
+}

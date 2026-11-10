@@ -1,0 +1,824 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ZeRO on 32 GPUs</title>
+<meta name="description" content="Data parallelism, ZeRO-1, ZeRO-2 and ZeRO-3 on 32 virtual GPUs built from threads: every byte each GPU holds and sends, measured, and checked against PyTorch on 32 real processes.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+/* A lab notebook for one idea: where the bytes of training live. Sticky index; each study is claim → instrument → what I found. */
+:root {
+  --bg:#f6f7f8; --panel:#ffffff; --panel2:#eef0f2; --ink:#0e1116; --ink2:#464b53; --muted:#808792; --rule:#e1e4e8; --rule2:#cdd2d8;
+  --blue:#2a78d6; --red:#e34948; --ddp:#7c3aed; --z1:#d97706; --z2:#0891b2; --z3:#159447; --off:#b45309;
+  --c-weights:#0891b2; --c-grads:#d97706; --c-master:#7c3aed; --c-adam_m:#159447; --c-adam_v:#6cc48a;
+  --c-gathered:#8fd3e8; --c-grad_bucket:#f3c47e; --c-activations:#b3bac4;
+  --fwd:#2a78d6; --bwd:#6da3e6; --idle:#d9dce1;
+  --shadow:0 1px 2px rgba(14,17,22,.04),0 8px 24px -12px rgba(14,17,22,.14);
+  --f-display:"IBM Plex Sans Condensed","Arial Narrow",system-ui,sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0c0f13; --panel:#13171d; --panel2:#1a1f27; --ink:#eceef1; --ink2:#b3b9c2; --muted:#7b838e; --rule:#242a33; --rule2:#333b46;
+  --blue:#5b9be6; --red:#f06b6a; --ddp:#9d6cf2; --z1:#f0a03a; --z2:#2cb3d4; --z3:#34c08a; --off:#e08a3c;
+  --c-weights:#2cb3d4; --c-grads:#f0a03a; --c-master:#9d6cf2; --c-adam_m:#34c08a; --c-adam_v:#7fd6a6;
+  --c-gathered:#9fe0f0; --c-grad_bucket:#f6cf8e; --c-activations:#59616d; --fwd:#5b9be6; --bwd:#8ab8ef; --idle:#2c323c;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px -14px rgba(0,0,0,.6); color-scheme:dark;}}
+:root[data-theme="dark"]{
+  --bg:#0c0f13; --panel:#13171d; --panel2:#1a1f27; --ink:#eceef1; --ink2:#b3b9c2; --muted:#7b838e; --rule:#242a33; --rule2:#333b46;
+  --blue:#5b9be6; --red:#f06b6a; --ddp:#9d6cf2; --z1:#f0a03a; --z2:#2cb3d4; --z3:#34c08a; --off:#e08a3c;
+  --c-weights:#2cb3d4; --c-grads:#f0a03a; --c-master:#9d6cf2; --c-adam_m:#34c08a; --c-adam_v:#7fd6a6;
+  --c-gathered:#9fe0f0; --c-grad_bucket:#f6cf8e; --c-activations:#59616d; --fwd:#5b9be6; --bwd:#8ab8ef; --idle:#2c323c;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px -14px rgba(0,0,0,.6); color-scheme:dark;}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:64px;-webkit-text-size-adjust:100%}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+body{margin:0;background:var(--bg);color:var(--ink);font:400 16px/1.62 var(--f-body);-webkit-font-smoothing:antialiased;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-bottom:72px}
+.wrap{max-width:1140px;margin:0 auto}
+.col{max-width:70ch}
+h1,h2,h3{font-family:var(--f-display);text-wrap:balance;letter-spacing:-.015em;margin:0}
+h1{font-size:clamp(2.5rem,6.6vw,4.8rem);line-height:.95;font-weight:700}
+h1 .grad{background:linear-gradient(92deg,var(--ddp),var(--z1) 35%,var(--z2) 65%,var(--z3));-webkit-background-clip:text;background-clip:text;color:transparent}
+h2{font-size:clamp(1.55rem,3vw,2.2rem);line-height:1.08;font-weight:600}
+h3{font-size:1.15rem;font-weight:600}
+p{margin:0}
+b{font-weight:600}
+.mono,code{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+code{font-size:.86em;background:var(--panel2);padding:.08em .38em;border-radius:4px}
+a{color:var(--blue)}
+.eyebrow{font:600 .72rem/1 var(--f-mono);letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.theme{position:absolute;top:18px;right:0;font:500 .8rem var(--f-mono);border:1px solid var(--rule);background:var(--panel);color:var(--ink2);border-radius:999px;padding:6px 12px;cursor:pointer}
+/* hero */
+header.hero{position:relative;padding-block:56px 26px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:36px;align-items:center}
+@media (max-width:900px){header.hero{grid-template-columns:minmax(0,1fr);padding-top:64px}}
+.hero-copy{display:grid;gap:18px;min-width:0}
+.lede{font-size:1.1rem;color:var(--ink2);max-width:56ch}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{font:500 .78rem var(--f-mono);padding:5px 10px;border-radius:999px;background:var(--panel);border:1px solid var(--rule);color:var(--ink2)}
+.chip b{color:var(--ink)}
+.links{display:flex;flex-wrap:wrap;gap:10px 18px;font:500 .92rem var(--f-body)}
+.links a{text-decoration:none;border-bottom:1px solid currentColor;padding-bottom:1px}
+.stage{position:relative;background:var(--panel);border:1px solid var(--rule);border-radius:16px;box-shadow:var(--shadow);padding:10px;min-width:0}
+.stage canvas{display:block;width:100%;aspect-ratio:1/1;max-height:520px}
+.stage .cap{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font:500 .74rem var(--f-mono);color:var(--muted);padding:6px 6px 2px}
+/* findings */
+.findings{display:grid;grid-template-columns:repeat(auto-fit,minmax(172px,1fr));gap:12px;padding-block:8px 34px}
+.finding{background:var(--panel);border:1px solid var(--rule);border-radius:12px;padding:16px 16px 14px;display:grid;gap:6px;align-content:start;transition:transform .25s ease,box-shadow .25s ease,border-color .25s}
+.finding:hover{transform:translateY(-2px);box-shadow:var(--shadow);border-color:var(--rule2)}
+.finding .k{font:600 .66rem var(--f-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.finding .big{font:600 1.6rem/1.05 var(--f-mono);letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.finding .what{font-size:.85rem;color:var(--ink2);line-height:1.45}
+/* toc */
+nav.toc{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 86%,transparent);backdrop-filter:saturate(1.4) blur(10px);-webkit-backdrop-filter:saturate(1.4) blur(10px);border-block:1px solid var(--rule);margin-inline:-16px;padding-inline:16px}
+nav.toc .in{display:flex;gap:4px;overflow-x:auto;padding-block:8px;scrollbar-width:none;max-width:1140px;margin:0 auto}
+nav.toc .in::-webkit-scrollbar{display:none}
+nav.toc a{flex:none;font:500 .8rem var(--f-mono);color:var(--ink2);text-decoration:none;padding:6px 10px;border-radius:999px;transition:background .2s,color .2s}
+nav.toc a:hover{background:var(--panel2);color:var(--ink)}
+nav.toc a[aria-current="true"]{background:var(--ink);color:var(--bg)}
+/* studies */
+section.study{padding-block:60px 12px;display:grid;gap:20px}
+section.study+section.study{border-top:1px solid var(--rule)}
+.head{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;align-items:baseline}
+.head .n{font:600 .95rem var(--f-mono);color:var(--blue)}
+.verdict{grid-column:2;justify-self:start;display:inline-flex;align-items:center;gap:8px;font:600 .74rem var(--f-mono);letter-spacing:.04em;padding:5px 11px 5px 9px;border-radius:999px;border:1px solid}
+.verdict::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.v-ok{color:var(--z3);border-color:color-mix(in srgb,var(--z3) 40%,transparent);background:color-mix(in srgb,var(--z3) 9%,transparent)}
+.v-rev{color:var(--z1);border-color:color-mix(in srgb,var(--z1) 40%,transparent);background:color-mix(in srgb,var(--z1) 9%,transparent)}
+.v-mix{color:var(--ddp);border-color:color-mix(in srgb,var(--ddp) 40%,transparent);background:color-mix(in srgb,var(--ddp) 9%,transparent)}
+.claim{border-left:2px solid var(--rule2);padding-left:14px;color:var(--ink2);font-style:italic}
+.answer{background:var(--panel);border:1px solid var(--rule);border-radius:12px;padding:16px 18px;box-shadow:var(--shadow)}
+.answer .tag{display:block;font:600 .68rem var(--f-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--blue);margin-bottom:6px}
+.card{background:var(--panel);border:1px solid var(--rule);border-radius:14px;padding:16px;min-width:0}
+.card h3{margin-bottom:4px}
+.card .sub{font-size:.88rem;color:var(--ink2);margin-bottom:12px}
+.controls{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;font-size:.88rem;margin-bottom:12px}
+.controls .lab{font:600 .7rem var(--f-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.seg{display:inline-flex;flex-wrap:wrap;padding:3px;gap:2px;background:var(--panel2);border-radius:999px}
+.seg button{font:500 .8rem var(--f-mono);padding:5px 12px;border:0;border-radius:999px;background:transparent;color:var(--ink2);cursor:pointer;transition:background .2s,color .2s,box-shadow .2s}
+.seg button:hover{color:var(--ink)}
+.seg button[aria-pressed="true"]{background:var(--panel);color:var(--sel,var(--ink));box-shadow:0 1px 3px rgba(0,0,0,.14);font-weight:600}
+.btn{font:600 .8rem var(--f-mono);padding:7px 14px;border-radius:999px;border:1px solid var(--rule2);background:var(--ink);color:var(--bg);cursor:pointer}
+.btn.ghost{background:transparent;color:var(--ink)}
+button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+input[type=range]{accent-color:var(--ink);width:100%}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,430px),1fr));gap:14px}
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,290px),1fr));gap:14px}
+.note{font:500 .76rem/1.5 var(--f-mono);color:var(--muted)}
+svg{display:block;width:100%;height:auto;overflow:visible}
+svg text{font-family:var(--f-mono);font-size:10.5px;fill:var(--muted)}
+svg .t-ink{fill:var(--ink)} svg .t-ink2{fill:var(--ink2)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font:500 .74rem var(--f-mono);color:var(--ink2);margin-top:10px}
+.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:3px;background:var(--c);margin-right:6px;vertical-align:-1px}
+/* ring collective player */
+.ringplay{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr);gap:18px;align-items:center}
+@media (max-width:760px){.ringplay{grid-template-columns:minmax(0,1fr)}}
+.mx{display:grid;gap:4px}
+.mx .row{display:grid;grid-template-columns:54px repeat(var(--n),minmax(0,1fr));gap:4px;align-items:stretch}
+.mx .rh{font:600 .72rem var(--f-mono);color:var(--muted);display:flex;align-items:center}
+.mx .cell{position:relative;border-radius:7px;background:var(--panel2);min-height:44px;display:grid;place-items:center;font:600 .92rem var(--f-mono);transition:background .35s,transform .35s,box-shadow .35s}
+.mx .cell small{position:absolute;bottom:3px;left:0;right:0;text-align:center;font:500 .6rem var(--f-mono);color:var(--muted);letter-spacing:.05em}
+.mx .cell.send{box-shadow:inset 0 0 0 2px var(--z1)}
+.mx .cell.recv{transform:scale(1.06);box-shadow:0 0 0 2px var(--z2),0 6px 18px -6px var(--z2)}
+.mx .cell.done{background:color-mix(in srgb,var(--z3) 22%,var(--panel2))}
+.mx .hdr{font:600 .66rem var(--f-mono);color:var(--muted);text-align:center;text-transform:uppercase;letter-spacing:.08em}
+.readout{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:12px}
+.ro{background:var(--panel2);border-radius:10px;padding:10px 12px;min-width:0}
+.ro b{display:block;font:600 1.05rem var(--f-mono);overflow-wrap:anywhere}
+.ro span{font-size:.76rem;color:var(--ink2)}
+/* 16 bytes */
+.bytes16{display:grid;grid-template-columns:repeat(16,minmax(0,1fr));gap:4px;margin:10px 0 6px}
+.byte{position:relative;aspect-ratio:1;border-radius:5px;background:var(--panel2);overflow:hidden}
+.byte i{position:absolute;left:0;right:0;bottom:0;background:var(--c);transition:height .45s cubic-bezier(.3,.7,.2,1)}
+.bgroups{display:grid;grid-template-columns:2fr 2fr 4fr 4fr 4fr;gap:4px;font:500 .66rem var(--f-mono);color:var(--muted);text-align:center}
+.bigsum{font:600 2.4rem/1 var(--f-mono);letter-spacing:-.03em}
+/* 32 gpu grid */
+.nodes{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+@media (max-width:900px){.nodes{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:480px){.nodes{grid-template-columns:minmax(0,1fr)}}
+.node{border:1.5px dashed var(--rule2);border-radius:12px;padding:8px 7px 7px}
+.node h4{margin:0 0 6px;font:600 .64rem var(--f-mono);color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+.gpus{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:4px;align-items:end;height:130px}
+.gpu{position:relative;height:100%;display:flex;flex-direction:column-reverse;background:var(--panel2);border-radius:5px;overflow:hidden}
+.gpu i{display:block;width:100%;transition:height .16s linear}
+.gpu small{position:absolute;top:2px;left:0;right:0;text-align:center;font:600 .55rem var(--f-mono);color:var(--muted)}
+.player{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:12px}
+.player input{flex:1;min-width:180px}
+.phase{font:600 .82rem var(--f-mono);min-width:140px}
+/* bars */
+.hbar{display:grid;grid-template-columns:86px minmax(0,1fr) 74px;gap:10px;align-items:center;margin:8px 0;font:500 .8rem var(--f-mono)}
+.hbar .tr{position:relative;height:22px;background:var(--panel2);border-radius:6px;overflow:hidden;display:flex}
+.hbar .tr i{height:100%;transition:width .9s cubic-bezier(.3,.7,.2,1)}
+.hbar .v{text-align:right;font-weight:600}
+.wallrow{display:grid;grid-template-columns:70px minmax(0,1fr) 92px;gap:10px;align-items:center;margin:10px 0 2px;font:500 .8rem var(--f-mono)}
+.wallrow .tr{position:relative;height:24px;background:var(--panel2);border-radius:6px}
+.wallrow .fill{position:absolute;left:0;top:0;bottom:0;border-radius:6px;transition:width .3s ease,opacity .3s}
+.wallrow .cardline{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--red);transition:left .3s}
+.fitrow{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;margin:2px 0 6px 80px}
+.fit{display:inline-block;font:600 .64rem var(--f-mono);padding:2px 7px;border-radius:6px;color:#fff}
+label.sl{display:block;font-size:.84rem;color:var(--ink2);margin:10px 0 4px}
+label.sl b{color:var(--ink);font-family:var(--f-mono)}
+/* tables */
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{border-collapse:collapse;width:100%;font:500 .8rem var(--f-mono)}
+th,td{padding:7px 7px;border-bottom:1px solid var(--rule);text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{font-weight:600;color:var(--muted);font-size:.7rem;text-transform:uppercase;letter-spacing:.06em}
+td.ok{color:var(--z3);font-weight:700}
+/* pros & cons, lessons */
+.pc{border-top:3px solid var(--c);display:grid;gap:8px}
+.pc ul{margin:0;padding-left:18px;font-size:.9rem;color:var(--ink2)}
+.pc li{margin:3px 0}
+.pc .k{font:600 .68rem var(--f-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--c)}
+.bug{display:grid;gap:6px}
+.bug .k{font:600 .68rem var(--f-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--red)}
+.reveal{opacity:0;transform:translateY(14px);transition:opacity .7s ease,transform .7s ease}
+.reveal.in{opacity:1;transform:none}
+@media (prefers-reduced-motion:reduce){.reveal{opacity:1;transform:none;transition:none}}
+footer{color:var(--muted);font:500 .8rem var(--f-mono);padding:40px 0 10px;border-top:1px solid var(--rule);margin-top:50px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header class="hero">
+  <button class="theme" id="theme" aria-label="Toggle light or dark theme">◐ theme</button>
+  <div class="hero-copy">
+    <div class="eyebrow">ERA V5 · Session 12 · Distributed Training I</div>
+    <h1>ZeRO on <span class="grad">32 GPUs</span> I built myself</h1>
+    <p class="lede">Thirty-two threads, four "nodes" of eight, ring collectives that pass real messages, and a ledger of every byte each GPU holds. One GPT, trained four ways: data parallel, ZeRO-1, ZeRO-2, ZeRO-3. The arithmetic is identical to the last bit. Only where the bytes live changes. Then the same thing on 32 real processes, with PyTorch's own implementations.</p>
+    <div class="chips" id="chips"></div>
+    <div class="links"><a href="https://github.com/sourav-dhar/era-v5-s12-zero">Repository</a><a href="https://github.com/sourav-dhar/era-v5-s12-zero/blob/main/zero_on_32_virtual_gpus.ipynb">Notebook</a><a href="https://github.com/sourav-dhar/era-v5-s12-zero/tree/main/results">Results JSON</a></div>
+  </div>
+  <div class="stage" aria-label="Animated ring of 32 GPUs">
+    <canvas id="hero"></canvas>
+    <div class="cap"><span id="heroCap">ring all-reduce · 32 GPUs</span><span><span style="color:var(--red)">━</span> InfiniBand hop &nbsp; <span style="color:var(--z2)">━</span> NVLink hop</span></div>
+  </div>
+</header>
+
+<div class="findings" id="findings"></div>
+</div>
+
+<nav class="toc" aria-label="Sections"><div class="in" id="toc">
+  <a href="#ring">01 · the ring</a><a href="#same">02 · same model</a><a href="#memory">03 · memory</a><a href="#step">04 · inside a step</a>
+  <a href="#wire">05 · the wire</a><a href="#clock">06 · the clock</a><a href="#wall">07 · V5 at 30B</a><a href="#real">08 · reality check</a>
+  <a href="#verdict">09 · what I'd pick</a><a href="#bugs">10 · what bit me</a>
+</div></nav>
+
+<div class="wrap">
+<!-- 01 -->
+<section class="study" id="ring">
+  <div class="head"><span class="n">01</span><h2>The ring: every GPU talks only to its right-hand neighbour</h2>
+    <span class="verdict v-ok">reduce-scatter + all-gather = all-reduce, bit for bit</span></div>
+  <p class="claim col">"A reduce-scatter followed by an all-gather produces exactly what an all-reduce produces… the pair costs the same as the whole." — lesson, §4</p>
+  <div class="card reveal">
+    <div class="controls">
+      <span class="lab">operation</span><div class="seg" id="rOp"></div>
+      <span class="lab">GPUs</span><div class="seg" id="rN"></div>
+      <button class="btn" id="rPlay">▶ play</button><button class="btn ghost" id="rStep">step →</button><button class="btn ghost" id="rReset">reset</button>
+    </div>
+    <div class="ringplay">
+      <svg id="rRing" viewBox="0 0 300 300" role="img" aria-label="ring diagram"></svg>
+      <div><div class="mx" id="rMx"></div>
+        <div class="readout"><div class="ro"><b id="rHop">–</b><span>ring hop</span></div><div class="ro"><b id="rSent">–</b><span>sent by each GPU so far</span></div><div class="ro"><b id="rWhat">–</b><span>what just happened</span></div></div>
+      </div>
+    </div>
+    <p class="note" style="margin-top:10px">Every GPU starts with the value of its own rank in every chunk (GPU 0 holds 1s, GPU 1 holds 2s…). A fully reduced chunk is the sum 1 + 2 + … + N. The small number under each value counts how many GPUs' contributions it already holds. Same chunk order and same addition order as <code>s12/vgpu.py</code>.</p>
+  </div>
+  <div class="answer col reveal"><span class="tag">What I measured on 32 GPUs</span><p id="ringAns"></p></div>
+</section>
+
+<!-- 02 -->
+<section class="study" id="same">
+  <div class="head"><span class="n">02</span><h2>One model, four arrangements, zero bits of difference</h2><span class="verdict v-ok">ZeRO changes storage, never the maths</span></div>
+  <div class="grid2">
+    <div class="card reveal"><h3>Training loss on 32 GPUs</h3><p class="sub">DDP, ZeRO-1, ZeRO-2 and ZeRO-3 drawn on top of each other, plus one GPU fed the whole 128-sequence batch.</p><svg id="lossChart" viewBox="0 0 520 260"></svg><div class="legend" id="lossLeg"></div></div>
+    <div class="card reveal"><h3>How identical is identical?</h3><p class="sub">After every step, every one of the weights compared across arrangements.</p><div class="scroll"><table id="tSame"></table></div><p class="note" style="margin-top:10px" id="sameNote"></p></div>
+  </div>
+</section>
+
+<!-- 03 -->
+<section class="study" id="memory">
+  <div class="head"><span class="n">03</span><h2>What one weight costs on one GPU</h2><span class="verdict v-ok">16 · 4 + 12/N · 2 + 14/N · 16/N, measured to every digit</span></div>
+  <div class="grid2">
+    <div class="card reveal">
+      <h3>The sixteen bytes</h3><p class="sub">Each square is one byte of the lesson's 16 bytes per weight. A sharded byte is split N ways: this GPU keeps 1/N of it.</p>
+      <div class="controls"><div class="seg" id="bStage"></div></div>
+      <div class="bgroups"><span>weight bf16</span><span>grad bf16</span><span>master fp32</span><span>Adam m</span><span>Adam v</span></div>
+      <div class="bytes16" id="b16"></div>
+      <label class="sl">GPUs N = <b id="bNLab"></b><input type="range" id="bN" min="0" max="10" step="1" value="5"></label>
+      <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-top:8px"><span class="bigsum" id="bSum"></span><span class="note" id="bNote"></span></div>
+    </div>
+    <div class="card reveal">
+      <h3>Measured against the formula, N = 1 … 32</h3><p class="sub">Dots: bytes per stored parameter in the ledgers of my virtual GPUs. Lines: the lesson's formulas.</p>
+      <svg id="sweepChart" viewBox="0 0 520 300"></svg>
+    </div>
+  </div>
+  <div class="card reveal">
+    <h3>All 32 GPUs, one training step</h3><p class="sub">Each column is one GPU, to the same scale for every arrangement. Play the step: activations pile up in the forward pass and drain in the backward. Under ZeRO-3 a layer's weights exist only while that layer computes.</p>
+    <div class="controls"><div class="seg" id="gStage"></div></div>
+    <div class="nodes" id="nodes"></div>
+    <div class="player"><button class="btn" id="gPlay">▶ play step</button><input type="range" id="gScrub" min="0" max="1" value="0" aria-label="position in the step"><span class="phase" id="gPhase"></span></div>
+    <div class="readout"><div class="ro"><b id="gNow">–</b><span>held by GPU 0 now</span></div><div class="ro"><b id="gPeak">–</b><span>peak inside the step</span></div><div class="ro"><b id="gBpp">–</b><span>training state, B / parameter</span></div><div class="ro"><b id="gCpu">–</b><span>in CPU memory (offload)</span></div></div>
+    <div class="legend" id="gLeg"></div>
+  </div>
+</section>
+
+<!-- 04 -->
+<section class="study" id="step">
+  <div class="head"><span class="n">04</span><h2>Inside a step: the peak the formula does not show</h2><span class="verdict v-rev">steady state ≠ what crashes you</span></div>
+  <div class="card reveal">
+    <div class="controls"><div class="seg" id="aStage"></div><span class="note" id="aNote"></span></div>
+    <svg id="areaChart" viewBox="0 0 1000 300"></svg>
+    <div class="legend" id="aLeg"></div>
+  </div>
+  <div class="answer col reveal"><span class="tag">What I found</span><p id="stepAns"></p></div>
+</section>
+
+<!-- 05 -->
+<section class="study" id="wire">
+  <div class="head"><span class="n">05</span><h2>What crosses the wire</h2><span class="verdict v-ok">2P · 2P · 2P · 3P, as 2(N−1)/N and 3(N−1)/N</span></div>
+  <div class="grid2">
+    <div class="card reveal"><h3>Bytes GPU 0 sends per step, in units of P</h3><p class="sub">P = one bf16 copy of the model. Hover a segment.</p><div id="wireBars"></div><div class="legend" id="wireLeg"></div></div>
+    <div class="card reveal"><h3>The same, for every N</h3><p class="sub">Dots measured, lines 2(N−1)/N and 3(N−1)/N.</p><svg id="commChart" viewBox="0 0 520 280"></svg></div>
+  </div>
+  <div class="answer col reveal"><span class="tag">Why stages 1 and 2 are free</span><p>DDP's all-reduce is a reduce-scatter followed by an all-gather. ZeRO-1 and ZeRO-2 do <b>the same two halves</b>, but in between they stop and use the slice: the reduce-scatter leaves each GPU holding the summed gradient for exactly the slice it owns, it updates that slice, and the all-gather moves the <i>new weights</i> instead of the gradients. Same bytes, same count. ZeRO-3 has no weights to keep, so it gathers them twice, before the forward and before the backward: one more P.</p></div>
+</section>
+
+<!-- 06 -->
+<section class="study" id="clock">
+  <div class="head"><span class="n">06</span><h2>The clock: compute never changes, the network does</h2><span class="verdict v-ok" id="clockVerdict">reproduces the lesson's 34% and 77%</span></div>
+  <div class="card reveal">
+    <div class="controls"><span class="lab">stage</span><div class="seg" id="cStage"></div><span class="lab">card</span><div class="seg" id="cCard"></div><span class="lab">collectives</span><div class="seg" id="cOv"></div></div>
+    <svg id="gantt" viewBox="0 0 1000 200"></svg>
+    <div class="readout"><div class="ro"><b id="cStep">–</b><span>simulated step, GPU 0</span></div><div class="ro"><b id="cComp">–</b><span>forward + backward</span></div><div class="ro"><b id="cNet">–</b><span>network time not hidden</span></div><div class="ro"><b id="cRatio">–</b><span>network ÷ compute</span></div></div>
+    <div class="legend"><span style="--c:var(--fwd)">forward</span><span style="--c:var(--bwd)">backward</span><span style="--c:var(--ddp)">optimizer</span><span style="--c:var(--idle)">waiting on the network</span><span style="--c:var(--z2)">all-gather</span><span style="--c:var(--z1)">reduce-scatter</span><span style="--c:var(--off)">PCIe</span></div>
+  </div>
+  <div class="grid2">
+    <div class="card reveal"><h3>Every arrangement, both cards</h3><p class="sub">Network time left over after overlap, as a share of compute.</p><div id="ratioBars"></div></div>
+    <div class="card reveal"><h3>How many GPUs per node?</h3><p class="sub">The same 32 GPUs wired three ways, collectives blocking.</p><div id="topoBars"></div><p class="note" style="margin-top:8px">A flat ring runs at the speed of its slowest hop: 4 nodes × 8 costs exactly what 32 × 1 does.</p></div>
+  </div>
+</section>
+
+<!-- 07 -->
+<section class="study" id="wall">
+  <div class="head"><span class="n">07</span><h2>V5 at 30 billion parameters: the memory wall</h2><span class="verdict v-mix">ZeRO-2 from 32 GPUs, or ZeRO-3 from 8</span></div>
+  <div class="grid2">
+    <div class="card reveal">
+      <h3>Will it fit?</h3><p class="sub">Bytes per parameter do not depend on model size, so my measurements scale straight to V5. Training state only: activations come on top.</p>
+      <label class="sl">model: <b id="wPsiLab"></b><input type="range" id="wPsi" min="-0.5" max="2.6" step="0.01" value="1.4771"></label>
+      <label class="sl">GPUs: <b id="wNLab"></b><input type="range" id="wN" min="0" max="10" step="1" value="5"></label>
+      <label class="sl">card: <b id="wCardLab"></b><input type="range" id="wCard" min="0" max="3" step="1" value="2"></label>
+      <div id="wallBars" style="margin-top:12px"></div>
+    </div>
+    <div class="card reveal"><h3>The ladder</h3><p class="sub">GiB per GPU against GPU count, log–log. The red rule is the card.</p><svg id="ladder" viewBox="0 0 520 320"></svg></div>
+  </div>
+</section>
+
+<!-- 08 -->
+<section class="study" id="real">
+  <div class="head"><span class="n">08</span><h2>Reality check: PyTorch on 32 real processes</h2><span class="verdict v-rev">two surprises in PyTorch's own ZeRO</span></div>
+  <p class="col" style="color:var(--ink2)">Same model, init, data and AdamW, on 32 real <code>torch.distributed</code> processes (gloo, CPU, on Modal): <code>DistributedDataParallel</code>, <code>ZeroRedundancyOptimizer</code>, and FSDP2 <code>fully_shard</code> with and without resharding after the forward. Everything fp32 there, so the state is 4 + 4 + 8 = 16 B per parameter and P is 4 bytes × Ψ.</p>
+  <div class="grid2">
+    <div class="card reveal"><h3>Do they train my model?</h3><p class="sub">|loss − my simulator's loss| at every step, fp32.</p><svg id="realLoss" viewBox="0 0 520 260"></svg><div class="legend" id="realLeg"></div></div>
+    <div class="card reveal"><h3>What rank 0 holds, and sends</h3><p class="sub">Measured from the tensors and from wrapped <code>torch.distributed</code> calls.</p><div class="scroll"><table id="tReal"></table></div></div>
+  </div>
+  <div class="grid2">
+    <div class="card reveal"><h3>Optimizer state per rank</h3><p class="sub">The ideal is a flat line at 8/32 = 0.25 B/param.</p><div class="controls"><div class="seg" id="iStrat"></div></div><svg id="imb" viewBox="0 0 520 220"></svg><p class="note" id="imbNote"></p></div>
+    <div class="card reveal"><h3>Why FSDP2 is uneven</h3><p class="sub">Rows of the 65 × 128 token embedding each rank holds. FSDP2 cuts every tensor along dim 0 in chunks of ⌈65/32⌉ = 3.</p><svg id="rows" viewBox="0 0 520 220"></svg></div>
+  </div>
+  <div class="answer col reveal"><span class="tag">What surprised me</span><p id="realAns"></p></div>
+</section>
+
+<!-- 09 -->
+<section class="study" id="verdict">
+  <div class="head"><span class="n">09</span><h2>Pros, cons, and what I would pick</h2></div>
+  <div class="grid2" id="pcs"></div>
+  <div class="answer col reveal"><span class="tag">For V5 (30B)</span><p>DDP and ZeRO-1 never fit at any GPU count: bf16 weights + gradients alone are 4 B × 30B = 111.8 GiB per card. That leaves <b>ZeRO-2 on 32+ GPUs</b> (68.1 GiB, tight once activations arrive) or <b>ZeRO-3 on 8+</b> (55.9 GiB, +50% traffic). My timeline says ZeRO-3's extra P hides behind compute <i>if</i> the next layer is prefetched; my topology test says the inter-node link, not the GPU count, sets the price. So I would start V5 on ZeRO-3 with prefetch, hierarchical collectives, communication logged as a share of compute from step one, and measure the peak, not the steady state.</p></div>
+</section>
+
+<!-- 10 -->
+<section class="study" id="bugs">
+  <div class="head"><span class="n">10</span><h2>What bit me while building it</h2><span class="verdict v-rev">every one of these was silent</span></div>
+  <div class="grid2">
+    <div class="card bug reveal"><span class="k">bug 1 · the ranks were not identical</span><h3>32 threads, one random generator</h3><p>Every GPU builds the model from seed 0, which should give identical weights. It did not: <code>torch.manual_seed</code> is process-wide, so 32 threads were seeding and drawing from the same generator at once. Two runs of the same config disagreed at step 0. Fixed with a lock, which is what DDP's broadcast-from-rank-0 guarantees for free.</p></div>
+    <div class="card bug reveal"><span class="k">bug 2 · clipping 32× too hard</span><h3>The norm of the sum is not the norm of the mean</h3><p>My shards hold <i>summed</i> gradients; I divide by N only in the update. I computed the clipping norm on the sums, so at N=32 it was 32× too large and clipping fired every step. Loss still went down, so nothing looked wrong. The test "N GPUs = 1 GPU on an N× batch, in fp64" caught it with a 4e-4 gap.</p></div>
+    <div class="card bug reveal"><span class="k">bug 3 · three weights out of 818,241</span><h3>Bit-identical except the last nine elements</h3><p>ZeRO-1's fp32 master differed from DDP's in 3 elements by 1e-9. All in the tail of a 1,081-element slice: the CPU's SIMD loop uses fused multiply-add, the scalar tail loop does not. Padding every slice to a multiple of 16 made all four arrangements bit-identical. Real libraries pad shards for similar reasons.</p></div>
+    <div class="card bug reveal"><span class="k">bug 4 · a network faster than physics</span><h3>Sending before the receiver is listening</h3><p>My first clock let a GPU push a chunk to its neighbour before the neighbour had entered the collective, so the ring finished 7% faster than (N−1)/N × P / bandwidth allows. NCCL writes into a buffer the receiver posts. Adding that handshake put DDP's network share on the lesson's 34% × 31/32, within my 0.24% shard padding.</p></div>
+    <div class="card bug reveal"><span class="k">lesson 5 · out of memory, simulating a memory saver</span><h3>The peak found me before I found it</h3><p>My notebook died of out-of-memory twice on an 8 GB laptop. First because every run kept 32 GPUs' worth of weights alive for the equality checks. Then because, at the peak of a step, all 32 ranks hold their activations at the same moment, which is exactly the part of memory that §04 shows no ZeRO stage touches. The reported run moved to a 16-core cloud CPU box.</p></div>
+    <div class="card bug reveal"><span class="k">lesson 6 · reading my own debug output</span><h3>"Exactly zero" that wasn't</h3><p>For a moment PyTorch's losses and mine looked <i>exactly</i> equal. They weren't: my debug print rounded to four decimals. The real gap is fp32 rounding, a few times 1e-8. Every number on this page is printed from the results file, not from my notes, for that reason.</p></div>
+  </div>
+</section>
+
+<footer>Built from <code>results/site.full.json</code> by <code>tools/export_site.py</code>. Every number on this page was measured by the notebook <code>zero_on_32_virtual_gpus.ipynb</code>; nothing here is typed in by hand except the words.</footer>
+</div>
+
+<script src="data.js"></script>
+<script>
+(function () {
+'use strict';
+var D = window.S12, S = D.summary || {}, ST = D.stages, CATS = D.cats, N = D.world, GPN = D.gpus_per_node;
+var RM = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+var $ = function (id) { return document.getElementById(id); };
+var css = function (v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); };
+var LAB = { weights: 'weights bf16', grads: 'gradients bf16', master: 'master fp32', adam_m: 'Adam m', adam_v: 'Adam v', gathered: 'gathered layer', grad_bucket: 'gradient bucket', activations: 'activations' };
+var SNAME = ['DDP', 'ZeRO-1', 'ZeRO-2', 'ZeRO-3'], SVAR = ['--ddp', '--z1', '--z2', '--z3'];
+var SC = function (k) { return k === 'off2' || k === 'off3' ? 'var(--off)' : 'var(' + SVAR[+k] + ')'; };
+function fb(b) { var u = [['GiB', 1073741824], ['MiB', 1048576], ['KiB', 1024]]; for (var i = 0; i < u.length; i++) if (Math.abs(b) >= u[i][1]) return (b / u[i][1]).toFixed(2) + ' ' + u[i][0]; return Math.round(b) + ' B'; }
+function sum(a) { var s = 0; for (var i = 0; i < a.length; i++) s += a[i]; return s; }
+function bpp(s, n) { return s === 0 ? 16 : s === 1 ? 4 + 12 / n : s === 2 ? 2 + 14 / n : 16 / n; }
+function seg(el, items, sel, on) {
+  el.innerHTML = '';
+  items.forEach(function (it) {
+    var b = document.createElement('button'); b.textContent = it[1]; b.setAttribute('aria-pressed', String(it[0] === sel));
+    if (it[2]) b.style.setProperty('--sel', it[2]);
+    b.onclick = function () { Array.prototype.forEach.call(el.children, function (x) { x.setAttribute('aria-pressed', 'false'); }); b.setAttribute('aria-pressed', 'true'); on(it[0]); };
+    el.appendChild(b);
+  });
+}
+var stageItems = ['0', '1', '2', '3'].map(function (k) { return [k, ST[k].name, SC(k)]; });
+var stageItemsOff = stageItems.concat(['off2', 'off3'].filter(function (k) { return ST[k]; }).map(function (k) { return [k, ST[k].name, SC(k)]; }));
+function legend(el, cats) { el.innerHTML = cats.map(function (c) { return '<span style="--c:var(--c-' + c + ')">' + LAB[c] + '</span>'; }).join(''); }
+
+// SVG presentation attributes don't take CSS variables in every browser: move them into inline style
+function fixSvgVars(root) { if (!root.querySelectorAll) return; Array.prototype.forEach.call(root.querySelectorAll('[fill^="var("],[stroke^="var("]'), function (e) { ['fill', 'stroke'].forEach(function (a) { var v = e.getAttribute(a); if (v && v.indexOf('var(') === 0) { e.style[a] = v; e.removeAttribute(a); } }); }); }
+new MutationObserver(function (ms) { ms.forEach(function (m) { fixSvgVars(m.target); }); }).observe(document.body, { subtree: true, childList: true });
+
+// theme
+try { var sv = localStorage.getItem('s12theme'); if (sv) document.documentElement.setAttribute('data-theme', sv); } catch (e) {}
+$('theme').onclick = function () {
+  var cur = document.documentElement.getAttribute('data-theme');
+  var dark = cur ? cur === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  var nx = dark ? 'light' : 'dark'; document.documentElement.setAttribute('data-theme', nx);
+  try { localStorage.setItem('s12theme', nx); } catch (e) {}
+  redrawAll();
+};
+
+// reveal + toc
+var io = 'IntersectionObserver' in window ? new IntersectionObserver(function (es) { es.forEach(function (e) { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } }); }, { threshold: .12 }) : null;
+Array.prototype.forEach.call(document.querySelectorAll('.reveal'), function (el) { io ? io.observe(el) : el.classList.add('in'); });
+var tocLinks = Array.prototype.slice.call(document.querySelectorAll('#toc a'));
+if ('IntersectionObserver' in window) {
+  var so = new IntersectionObserver(function (es) { es.forEach(function (e) { if (e.isIntersecting) tocLinks.forEach(function (a) { a.setAttribute('aria-current', String(a.getAttribute('href') === '#' + e.target.id)); }); }); }, { rootMargin: '-45% 0px -50% 0px' });
+  Array.prototype.forEach.call(document.querySelectorAll('section.study'), function (s) { so.observe(s); });
+}
+
+// ---------------------------------------------------------------- chips + findings
+var real = D.real || [], rd = D.real_detail || {};
+function realRow(k) { for (var i = 0; i < real.length; i++) if (real[i].strategy === k) return real[i]; return null; }
+var ddpTm = (D.timing || []).filter(function (r) { return r.arrangement === 'DDP' && !r.overlap; });
+var h100 = ddpTm.filter(function (r) { return r.card === 'H100'; })[0], b200 = ddpTm.filter(function (r) { return r.card === 'B200'; })[0];
+$('chips').innerHTML = [['Ψ', (S.psi || 0).toLocaleString() + ' params'], ['GPUs', N + ' = ' + (N / GPN) + ' × ' + GPN], ['steps', S.steps], ['final loss', (S.final_loss || 0).toFixed(4)], ['torch', S.torch]]
+  .map(function (c) { return '<span class="chip">' + c[0] + ' <b>' + c[1] + '</b></span>'; }).join('');
+var z1 = realRow('zero1'), f3 = rd.fsdp2_zero3;
+var emptyRanks = f3 ? f3.tok_rows.filter(function (v) { return v === 0; }).length : 0;
+var FIND = [
+  ['identical', '0 bits', 'differ between DDP, ZeRO-1, ZeRO-2 and ZeRO-3 after ' + S.steps + ' steps', 'var(--z3)'],
+  ['memory / GPU', ST['0'].bpp.toFixed(0) + ' → ' + ST['3'].bpp.toFixed(2), 'bytes per parameter, DDP → ZeRO-3 at N=' + N + ' (lesson: 16 → 16/N)', 'var(--z2)'],
+  ['traffic / GPU', '2·2·2·3 P', 'measured as 2(N−1)/N and 3(N−1)/N per step', 'var(--z1)'],
+  ['network ÷ compute', h100 ? (h100['network / compute'] * 100).toFixed(1) + '%' : '–', 'DDP, no overlap, H100 · ' + (b200 ? (b200['network / compute'] * 100).toFixed(1) + '% on B200' : '') + ' (lesson 34% / 77% × 31/32)', 'var(--ddp)'],
+  ['PyTorch ZeRO-1', z1 ? z1['ring bytes / rank / P'].toFixed(1) + ' P' : '–', 'ZeroRedundancyOptimizer sends more than DDP, and its shards are ' + (z1 ? z1['AdamW state: max/min over ranks'].toFixed(1) + '× uneven' : 'uneven'), 'var(--z1)'],
+  ['FSDP2', emptyRanks + ' / ' + N, 'ranks hold no rows of the token embedding: dim-0 sharding of a 65-row tensor', 'var(--z3)']];
+$('findings').innerHTML = FIND.map(function (f) { return '<div class="finding reveal"><span class="k">' + f[0] + '</span><span class="big" style="color:' + f[3] + '">' + f[1] + '</span><span class="what">' + f[2] + '</span></div>'; }).join('');
+Array.prototype.forEach.call(document.querySelectorAll('#findings .reveal'), function (el, i) { el.style.transitionDelay = (i * 70) + 'ms'; io ? io.observe(el) : el.classList.add('in'); });
+
+// ---------------------------------------------------------------- hero canvas: the ring
+(function hero() {
+  var cv = $('hero'), ctx = cv.getContext('2d'), W = 0, H = 0, dpr = 1;
+  function size() { dpr = Math.min(2, window.devicePixelRatio || 1); var r = cv.getBoundingClientRect(); W = r.width; H = r.height; cv.width = W * dpr; cv.height = H * dpr; }
+  size(); window.addEventListener('resize', size);
+  var SEQ = { '0': [['reduce-scatter', 'grads', '--z1'], ['all-gather', 'grads', '--z2']], '1': [['reduce-scatter', 'grads', '--z1'], ['all-gather', 'weights', '--z2']],
+    '2': [['reduce-scatter', 'grads', '--z1'], ['all-gather', 'weights', '--z2']], '3': [['all-gather', 'weights · fwd', '--z2'], ['all-gather', 'weights · bwd', '--z2'], ['reduce-scatter', 'grads', '--z1']] };
+  var stage = 0, op = 0, hop = 0, t0 = performance.now(), HOP = 760, sent = 0;
+  function pos(i, R, cx, cy) { var a = -Math.PI / 2 + i / N * Math.PI * 2; return [cx + R * Math.cos(a), cy + R * Math.sin(a), a]; }
+  function frame(now) {
+    var k = String(stage), seq = SEQ[k], cx = W / 2, cy = H / 2, R = Math.min(W, H) * .38;
+    var u = Math.min(1, (now - t0) / HOP);
+    if (now - t0 >= HOP) { t0 = now; hop++; sent += 1 / N; if (hop >= N - 1) { hop = 0; op++; if (op >= seq.length) { op = 0; sent = 0; stage = (stage + 1) % 4; } } }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+    var ink = css('--ink'), muted = css('--muted'), rule = css('--rule2'), p2 = css('--panel2'), red = css('--red'), cyan = css('--z2');
+    // node arcs
+    for (var n = 0; n < N / GPN; n++) {
+      var a0 = -Math.PI / 2 + (n * GPN - .42) / N * Math.PI * 2, a1 = -Math.PI / 2 + (n * GPN + GPN - .58) / N * Math.PI * 2;
+      ctx.beginPath(); ctx.arc(cx, cy, R + 26, a0, a1); ctx.strokeStyle = rule; ctx.lineWidth = 1.2; ctx.setLineDash([3, 4]); ctx.stroke(); ctx.setLineDash([]);
+      var am = (a0 + a1) / 2; ctx.fillStyle = muted; ctx.font = '600 10px "IBM Plex Mono", monospace'; ctx.textAlign = 'center';
+      ctx.fillText('node ' + n, cx + (R + 42) * Math.cos(am), cy + (R + 42) * Math.sin(am) + 3);
+    }
+    // links
+    for (var i = 0; i < N; i++) {
+      var p = pos(i, R, cx, cy), q = pos((i + 1) % N, R, cx, cy), ib = Math.floor(i / GPN) !== Math.floor(((i + 1) % N) / GPN);
+      ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); ctx.strokeStyle = ib ? red : cyan; ctx.globalAlpha = ib ? .9 : .35; ctx.lineWidth = ib ? 2.4 : 1.4; ctx.stroke(); ctx.globalAlpha = 1;
+    }
+    // GPUs with memory bars
+    var bp = ST[k].bpp / 16;
+    for (i = 0; i < N; i++) {
+      p = pos(i, R, cx, cy); var s = Math.max(5, R * Math.min(.085, 1.9 / N));
+      ctx.fillStyle = p2; ctx.strokeStyle = rule; ctx.lineWidth = 1; roundRect(ctx, p[0] - s, p[1] - s, 2 * s, 2 * s, 4); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = css(SVAR[stage]); var hh = 2 * s * Math.max(.05, bp); roundRect(ctx, p[0] - s, p[1] + s - hh, 2 * s, hh, 3); ctx.fill();
+    }
+    // packets
+    var col = css(seq[op][2]);
+    for (i = 0; i < N; i++) {
+      p = pos(i, R, cx, cy); q = pos((i + 1) % N, R, cx, cy); ib = Math.floor(i / GPN) !== Math.floor(((i + 1) % N) / GPN);
+      var f = ib ? u : Math.min(1, u * 9);    // NVLink is 9x faster: its packets arrive early and wait for the IB hops
+      var x = p[0] + (q[0] - p[0]) * f, y = p[1] + (q[1] - p[1]) * f;
+      ctx.beginPath(); ctx.arc(x, y, ib ? 4.2 : 3.2, 0, Math.PI * 2); ctx.fillStyle = ib ? red : col; ctx.shadowColor = ib ? red : col; ctx.shadowBlur = 10; ctx.fill(); ctx.shadowBlur = 0;
+    }
+    // centre
+    ctx.textAlign = 'center'; ctx.fillStyle = css(SVAR[stage]); ctx.font = '700 ' + Math.round(R * .2) + 'px "IBM Plex Sans Condensed", sans-serif';
+    ctx.fillText(SNAME[stage], cx, cy - R * .08);
+    ctx.fillStyle = ink; ctx.font = '600 ' + Math.round(R * .085) + 'px "IBM Plex Mono", monospace';
+    ctx.fillText(ST[k].bpp.toFixed(2) + ' B/param', cx, cy + R * .1);
+    ctx.fillStyle = muted; ctx.font = '500 ' + Math.round(R * .06) + 'px "IBM Plex Mono", monospace';
+    ctx.fillText(seq[op][0] + ' of ' + seq[op][1], cx, cy + R * .24);
+    ctx.fillText('hop ' + (hop + 1) + ' / ' + (N - 1), cx, cy + R * .34);
+    $('heroCap').textContent = SNAME[stage] + ' · ' + seq[op][0] + ' · each GPU has sent ' + (op * (N - 1) / N + hop / N).toFixed(2) + ' P';
+    if (!RM) requestAnimationFrame(frame);
+  }
+  function roundRect(c, x, y, w, h, r) { r = Math.min(r, w / 2, h / 2); c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath(); }
+  requestAnimationFrame(frame);
+})();
+
+// ---------------------------------------------------------------- 01 ring player
+(function ring() {
+  var op = 'ar', n = 4, hop = 0, cells, timer = null, last = { send: [], recv: [] };
+  function init() { cells = []; for (var r = 0; r < n; r++) { cells.push([]); for (var c = 0; c < n; c++) cells[r].push({ v: r + 1, k: 1 }); } hop = 0; last = { send: [], recv: [] }; }
+  function total() { return op === 'ar' ? 2 * (n - 1) : n - 1; }
+  function doHop(h) {
+    var rs = op === 'rs' || (op === 'ar' && h < n - 1), s = op === 'ar' && !rs ? h - (n - 1) : h, snap = cells.map(function (r) { return r.map(function (x) { return { v: x.v, k: x.k }; }); });
+    last = { send: [], recv: [] };
+    if (op === 'ag' && h === 0 && cells[0][1].k === 1) { /* all-gather starts from reduced own chunk */ }
+    for (var r = 0; r < n; r++) {
+      var dst = (r + 1) % n, ch = rs ? ((r - s - 1) % n + n) % n : ((r - s) % n + n) % n;
+      if (rs) { cells[dst][ch] = { v: cells[dst][ch].v + snap[r][ch].v, k: cells[dst][ch].k + snap[r][ch].k }; }
+      else { cells[dst][ch] = { v: snap[r][ch].v, k: snap[r][ch].k }; }
+      last.send.push([r, ch]); last.recv.push([dst, ch]);
+    }
+  }
+  function prepAG() { // a standalone all-gather starts where a reduce-scatter ends: GPU r owns the full sum of chunk r
+    if (op !== 'ag') return; var full = n * (n + 1) / 2;
+    for (var r = 0; r < n; r++) for (var c = 0; c < n; c++) cells[r][c] = c === r ? { v: full, k: n } : { v: 0, k: 0 };
+  }
+  function draw() {
+    var mx = $('rMx'), h = '<div class="row" style="--n:' + n + '"><span></span>';
+    for (var c = 0; c < n; c++) h += '<span class="hdr">chunk ' + c + '</span>';
+    h += '</div>';
+    for (var r = 0; r < n; r++) {
+      h += '<div class="row" style="--n:' + n + '"><span class="rh">GPU ' + r + '</span>';
+      for (c = 0; c < n; c++) {
+        var x = cells[r][c], cls = 'cell';
+        if (last.send.some(function (a) { return a[0] === r && a[1] === c; })) cls += ' send';
+        if (last.recv.some(function (a) { return a[0] === r && a[1] === c; })) cls += ' recv';
+        if (x.k === n) cls += ' done';
+        h += '<div class="' + cls + '">' + (x.k ? x.v : '·') + '<small>' + (x.k ? x.k + '/' + n : '') + '</small></div>';
+      }
+      h += '</div>';
+    }
+    mx.innerHTML = h;
+    var T = total();
+    $('rHop').textContent = hop + ' / ' + T;
+    $('rSent').textContent = (hop / n).toFixed(2) + ' of the tensor';
+    var phase = op === 'ar' ? (hop === 0 ? 'start' : hop <= n - 1 ? 'reduce-scatter' : 'all-gather') : (op === 'rs' ? 'reduce-scatter' : 'all-gather');
+    $('rWhat').textContent = hop === 0 ? 'nothing sent yet' : hop === T ? 'done: every chunk holds ' + n + '/' + n : phase + ': each GPU passed one chunk right';
+    // ring svg
+    var sv = '', cx = 150, cy = 150, R = 105;
+    function P(i) { var a = -Math.PI / 2 + i / n * Math.PI * 2; return [cx + R * Math.cos(a), cy + R * Math.sin(a)]; }
+    sv += '<defs><marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0L10,5L0,10z" fill="var(--z1)"/></marker></defs>';
+    for (var i = 0; i < n; i++) {
+      var a = P(i), b = P((i + 1) % n), mxp = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], k = 0.18;
+      var ctrl = [mxp[0] + (mxp[0] - cx) * k, mxp[1] + (mxp[1] - cy) * k];
+      var active = hop > 0 && hop <= T;
+      sv += '<path d="M' + a[0] + ',' + a[1] + ' Q' + ctrl[0] + ',' + ctrl[1] + ' ' + b[0] + ',' + b[1] + '" fill="none" stroke="' + (active ? 'var(--z1)' : 'var(--rule2)') + '" stroke-width="' + (active ? 2.4 : 1.4) + '" marker-end="url(#ah)" stroke-dasharray="' + (active ? '6 5' : 'none') + '"><animate attributeName="stroke-dashoffset" from="22" to="0" dur=".8s" repeatCount="indefinite"/></path>';
+    }
+    for (i = 0; i < n; i++) { a = P(i); sv += '<circle cx="' + a[0] + '" cy="' + a[1] + '" r="22" fill="var(--panel)" stroke="var(--z2)" stroke-width="2"/><text x="' + a[0] + '" y="' + (a[1] + 4) + '" text-anchor="middle" class="t-ink" style="font-size:12px;font-weight:600">GPU ' + i + '</text>'; }
+    sv += '<text x="150" y="146" text-anchor="middle" class="t-ink2" style="font-size:12px">' + (op === 'ar' ? 'all-reduce' : op === 'rs' ? 'reduce-scatter' : 'all-gather') + '</text><text x="150" y="164" text-anchor="middle" style="font-size:10.5px">' + (op === 'ar' ? '2(N−1)' : '(N−1)') + ' hops</text>';
+    $('rRing').innerHTML = sv;
+  }
+  function reset() { stop(); init(); prepAG(); draw(); }
+  function step() { if (hop >= total()) return false; doHop(hop); hop++; draw(); return true; }
+  function stop() { if (timer) { clearInterval(timer); timer = null; $('rPlay').textContent = '▶ play'; } }
+  seg($('rOp'), [['rs', 'reduce-scatter'], ['ag', 'all-gather'], ['ar', 'all-reduce']], op, function (v) { op = v; reset(); });
+  seg($('rN'), [[4, '4'], [8, '8']], n, function (v) { n = v; reset(); });
+  $('rStep').onclick = function () { stop(); if (!step()) { reset(); } };
+  $('rReset').onclick = reset;
+  $('rPlay').onclick = function () { if (timer) return stop(); if (hop >= total()) reset(); $('rPlay').textContent = '❚❚ pause'; timer = setInterval(function () { if (!step()) stop(); }, 900); };
+  reset();
+  var col = S.collectives || [], m = col[1] || col[0];
+  if (m) $('ringAns').innerHTML = 'On all ' + N + ' GPUs with random fp64 data: the reduce-scatter slices match the exact sum to <b>' + m['max |RS slice − exact sum|'].toExponential(1) + '</b>, reduce-scatter → all-gather equals all-reduce <b>bit for bit</b> on every rank, and each GPU sends <b>' + m['RS bytes sent / tensor'].toFixed(5) + '</b> of the tensor per phase, which is (N−1)/N = ' + ((N - 1) / N).toFixed(5) + '. The literal version (every hop a message between threads) and the fast version agree to the last bit; the literal one is just ' + (col[0] && col[1] ? Math.round(col[0]['wall (s)'] / Math.max(.01, col[1]['wall (s)'])) + '× slower' : 'slower') + ' in Python.';
+})();
+
+// ---------------------------------------------------------------- charts helper
+function chart(svg, o) {
+  var W = o.W || 520, H = o.H || 260, L = o.L || 52, R = o.R || 16, T = o.T || 14, B = o.B || 36;
+  var xlog = o.xlog, ylog = o.ylog, x0 = o.x[0], x1 = o.x[1], y0 = o.y[0], y1 = o.y[1];
+  var fx = function (v) { return L + (xlog ? Math.log(v / x0) / Math.log(x1 / x0) : (v - x0) / (x1 - x0)) * (W - L - R); };
+  var fy = function (v) { return H - B - (ylog ? Math.log(Math.max(v, y0) / y0) / Math.log(y1 / y0) : (v - y0) / (y1 - y0)) * (H - T - B); };
+  var s = '';
+  (o.yt || []).forEach(function (t) { var y = fy(t); s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y + '" y2="' + y + '" stroke="var(--rule)"/><text x="' + (L - 6) + '" y="' + (y + 3) + '" text-anchor="end">' + (o.yf ? o.yf(t) : t) + '</text>'; });
+  (o.xt || []).forEach(function (t) { var x = fx(t); s += '<text x="' + x + '" y="' + (H - B + 15) + '" text-anchor="middle">' + (o.xf ? o.xf(t) : t) + '</text>'; });
+  if (o.xl) s += '<text x="' + ((L + W - R) / 2) + '" y="' + (H - 4) + '" text-anchor="middle" class="t-ink2">' + o.xl + '</text>';
+  if (o.yl) s += '<text x="12" y="' + ((T + H - B) / 2) + '" text-anchor="middle" class="t-ink2" transform="rotate(-90 12 ' + ((T + H - B) / 2) + ')">' + o.yl + '</text>';
+  (o.series || []).forEach(function (se) {
+    var pts = se.pts.filter(function (p) { return p[1] != null && isFinite(p[1]); });
+    if (se.line !== false && pts.length > 1) s += '<path d="' + pts.map(function (p, i) { return (i ? 'L' : 'M') + fx(p[0]).toFixed(1) + ',' + fy(p[1]).toFixed(1); }).join('') + '" fill="none" stroke="' + se.c + '" stroke-width="' + (se.w || 2) + '" stroke-opacity="' + (se.o || 1) + '"' + (se.dash ? ' stroke-dasharray="' + se.dash + '"' : '') + ' stroke-linejoin="round" stroke-linecap="round"' + (se.draw ? ' class="drawline"' : '') + '/>';
+    if (se.dots) pts.forEach(function (p) { s += '<circle cx="' + fx(p[0]) + '" cy="' + fy(p[1]) + '" r="' + (se.r || 4) + '" fill="' + se.c + '" stroke="var(--panel)" stroke-width="1.5"><title>' + (se.name || '') + ' ' + p[0] + ': ' + (+p[1]).toPrecision(4) + '</title></circle>'; });
+    if (se.label) { var lp = pts[pts.length - 1]; s += '<text x="' + (fx(lp[0]) + 6) + '" y="' + (fy(lp[1]) + 3) + '" style="fill:' + se.c + ';font-weight:600">' + se.label + '</text>'; }
+  });
+  if (o.extra) s += o.extra(fx, fy);
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H); svg.innerHTML = s;
+  Array.prototype.forEach.call(svg.querySelectorAll('.drawline'), function (p) { if (RM) return; var L2 = p.getTotalLength(); p.style.strokeDasharray = L2; p.style.strokeDashoffset = L2; p.getBoundingClientRect(); p.style.transition = 'stroke-dashoffset 1.6s ease'; p.style.strokeDashoffset = 0; });
+}
+function pow10ticks(a, b) { var t = []; for (var e = Math.floor(Math.log10(a)); e <= Math.ceil(Math.log10(b)); e++) t.push(Math.pow(10, e)); return t.filter(function (v) { return v >= a && v <= b; }); }
+
+// ---------------------------------------------------------------- 02 same model
+function drawLoss() {
+  var L = D.losses || [], one = D.one_gpu_losses || [];
+  var xs = L.map(function (_, i) { return i; }), lo = Math.min.apply(null, L.concat(one)), hi = Math.max.apply(null, L.concat(one));
+  var ser = [];
+  [0, 1, 2, 3].forEach(function (s) { ser.push({ pts: L.map(function (v, i) { return [i, v]; }), c: 'var(' + SVAR[s] + ')', w: 7 - s * 1.8, draw: true }); });
+  if (one.length) ser.push({ pts: one.map(function (v, i) { return [i, v]; }), c: 'var(--muted)', w: 1.4, dash: '4 4' });
+  chart($('lossChart'), { x: [0, L.length - 1], y: [Math.floor(lo * 10) / 10, Math.ceil(hi * 10) / 10], yt: [2, 2.5, 3, 3.5, 4].filter(function (v) { return v >= lo - .1 && v <= hi + .1; }), xt: [0, 25, 50, 75, 99].filter(function (v) { return v < L.length; }), xl: 'step', yl: 'loss', series: ser });
+  $('lossLeg').innerHTML = [0, 1, 2, 3].map(function (s) { return '<span style="--c:var(' + SVAR[s] + ')">' + SNAME[s] + '</span>'; }).join('') + '<span style="--c:var(--muted)">1 GPU, 32× batch</span>';
+  var sm = S.same_model || [];
+  $('tSame').innerHTML = '<thead><tr><th>arrangement</th><th>loss = DDP</th><th>fp32 master</th><th>bf16 weights</th><th>final loss</th></tr></thead><tbody>' + sm.map(function (r) {
+    var ok = function (v) { return '<td class="' + (v ? 'ok' : '') + '">' + (v ? '✓ identical' : '✗') + '</td>'; };
+    return '<tr><td>' + r.arrangement + '</td>' + ok(r['loss == DDP at every step']) + ok(r['fp32 master == DDP (all bits)']) + ok(r['bf16 weights == DDP (all bits)']) + '<td>' + r['final loss'].toFixed(4) + '</td></tr>';
+  }).join('') + '</tbody>';
+  $('sameNote').innerHTML = 'One GPU on the whole batch, in fp64: largest weight difference <b>' + (S.fp64_max_weight_diff || 0).toExponential(1) + '</b>. In bf16 the curves drift by up to ' + (S.bf16_one_gpu_loss_diff_max || 0).toFixed(3) + ': the ring adds 32 bf16 gradients one hop at a time, rounding 31 times; one GPU rounds once.';
+}
+
+// ---------------------------------------------------------------- 03 sixteen bytes
+(function bytes() {
+  var stage = 3, groups = [['weights', 2], ['grads', 2], ['master', 4], ['adam_m', 4], ['adam_v', 4]];
+  var shard = { 0: [], 1: ['master', 'adam_m', 'adam_v'], 2: ['grads', 'master', 'adam_m', 'adam_v'], 3: ['weights', 'grads', 'master', 'adam_m', 'adam_v'] };
+  var el = $('b16'), items = [];
+  groups.forEach(function (g) { for (var i = 0; i < g[1]; i++) { var d = document.createElement('div'); d.className = 'byte'; var f = document.createElement('i'); f.style.setProperty('--c', 'var(--c-' + g[0] + ')'); d.appendChild(f); el.appendChild(d); items.push([g[0], f, d]); } });
+  function draw() {
+    var n = Math.pow(2, +$('bN').value); $('bNLab').textContent = n;
+    var tot = 0;
+    items.forEach(function (it) { var sh = shard[stage].indexOf(it[0]) >= 0, frac = sh ? 1 / n : 1; tot += frac; it[1].style.height = (Math.max(frac, sh ? .03 : 1) * 100) + '%'; it[2].title = it[0] + (sh ? ': 1/' + n + ' of a byte' : ': whole byte'); });
+    $('bSum').innerHTML = '<span style="color:var(' + SVAR[stage] + ')">' + (tot >= 10 ? tot.toFixed(1) : tot.toFixed(3)) + '</span> <span style="font-size:1rem;color:var(--muted)">B / param</span>';
+    var gib = 30e9 * tot / 1073741824;
+    $('bNote').innerHTML = '× 30B params = <b style="color:var(--ink)">' + gib.toFixed(1) + ' GiB</b> per GPU · card 74.5 GiB · ' + (gib <= 74.5 ? '<span style="color:var(--z3)">fits</span>' : '<span style="color:var(--red)">does not fit</span>');
+  }
+  seg($('bStage'), stageItems, String(stage), function (v) { stage = +v; draw(); });
+  $('bN').oninput = draw; draw();
+})();
+function drawSweep() {
+  var sw = D.sweep || {}, Ns = []; Object.keys(sw).forEach(function (k) { var n = +k.split('|')[1]; if (Ns.indexOf(n) < 0) Ns.push(n); }); Ns.sort(function (a, b) { return a - b; });
+  var nmax = Ns[Ns.length - 1], ser = [], ser2 = [];
+  [0, 1, 2, 3].forEach(function (s) {
+    var line = []; for (var e = 0; e <= Math.log2(nmax) + .001; e += .1) { var n = Math.pow(2, e); line.push([n, bpp(s, n)]); }
+    ser.push({ pts: line, c: 'var(' + SVAR[s] + ')', w: 1.6, o: .5 });
+    ser.push({ pts: Ns.map(function (n) { return [n, sw[s + '|' + n].bpp]; }), c: 'var(' + SVAR[s] + ')', line: false, dots: true, name: SNAME[s], label: SNAME[s] + ' ' + sw[s + '|' + nmax].bpp.toFixed(3) });
+    var l2 = []; for (e = 0; e <= Math.log2(nmax) + .001; e += .1) { n = Math.pow(2, e); l2.push([n, (s === 3 ? 3 : 2) * (n - 1) / n]); }
+    ser2.push({ pts: l2, c: 'var(' + SVAR[s] + ')', w: 1.6, o: .45 });
+    ser2.push({ pts: Ns.map(function (n) { return [n, sw[s + '|' + n].sentP]; }), c: 'var(' + SVAR[s] + ')', line: false, dots: true, r: 4.5 - s * .6, name: SNAME[s] });
+  });
+  chart($('sweepChart'), { W: 520, H: 300, R: 112, x: [1, nmax], y: [0.4, 20], xlog: true, ylog: true, xt: Ns, yt: [0.5, 1, 2, 4, 8, 16], xl: 'GPUs N', yl: 'bytes / parameter', series: ser });
+  chart($('commChart'), { W: 520, H: 280, R: 92, x: [1, nmax], y: [0, 3.2], xlog: true, xt: Ns, yt: [0, 1, 2, 3], yf: function (v) { return v + 'P'; }, xl: 'GPUs N', yl: 'sent per GPU per step', series: ser2,
+    extra: function (fx, fy) { return '<text x="' + (fx(nmax) + 8) + '" y="' + (fy(3 * (nmax - 1) / nmax) + 4) + '" style="fill:var(--z3);font-weight:600">ZeRO-3</text><text x="' + (fx(nmax) + 8) + '" y="' + (fy(2 * (nmax - 1) / nmax) + 4) + '" style="fill:var(--ink2);font-weight:600">DDP · Z1 · Z2</text>'; } });
+}
+
+// ---------------------------------------------------------------- 03 32-GPU grid
+(function grid() {
+  var cur = '3', idx = 0, timer = null, top = 0, tiles = [];
+  Object.keys(ST).forEach(function (k) { ST[k].trace.forEach(function (e) { top = Math.max(top, sum(e.v)); }); });
+  var nodes = $('nodes');
+  for (var n = 0; n < N / GPN; n++) {
+    var nd = document.createElement('div'); nd.className = 'node'; nd.innerHTML = '<h4>node ' + n + ' · GPUs ' + (n * GPN) + '–' + (n * GPN + GPN - 1) + '</h4>';
+    var g = document.createElement('div'); g.className = 'gpus';
+    for (var j = 0; j < GPN; j++) {
+      var t = document.createElement('div'); t.className = 'gpu'; t.title = 'GPU ' + (n * GPN + j);
+      tiles.push(CATS.map(function (c) { var i = document.createElement('i'); i.style.background = 'var(--c-' + c + ')'; t.appendChild(i); return i; }));
+      var sm = document.createElement('small'); sm.textContent = n * GPN + j; t.appendChild(sm); g.appendChild(t);
+    }
+    nd.appendChild(g); nodes.appendChild(nd);
+  }
+  function draw() {
+    var s = ST[cur], e = s.trace[Math.min(idx, s.trace.length - 1)];
+    tiles.forEach(function (segs, r) { var v = e ? e.v : s.steady[r]; segs.forEach(function (el, j) { el.style.height = (v[j] / top * 100) + '%'; }); });
+    $('gNow').textContent = fb(e ? sum(e.v) : 0); $('gPhase').textContent = e ? e.p : ''; $('gScrub').value = idx;
+  }
+  function select(k) { cur = k; idx = 0; stop(); var s = ST[k]; $('gScrub').max = s.trace.length - 1;
+    $('gPeak').textContent = fb(s.peak) + ' · ' + s.peak_phase; $('gBpp').textContent = s.bpp.toFixed(3) + ' (lesson ' + s.formula.toFixed(3) + ')'; $('gCpu').textContent = sum(s.host) ? fb(sum(s.host)) : '—'; draw(); }
+  function stop() { if (timer) { clearInterval(timer); timer = null; $('gPlay').textContent = '▶ play step'; } }
+  seg($('gStage'), stageItemsOff, cur, select);
+  $('gScrub').oninput = function () { stop(); idx = +this.value; draw(); };
+  $('gPlay').onclick = function () { if (timer) return stop(); var s = ST[cur]; if (idx >= s.trace.length - 1) idx = 0; $('gPlay').textContent = '❚❚ pause';
+    timer = setInterval(function () { idx++; if (idx >= s.trace.length) { idx = s.trace.length - 1; stop(); } draw(); }, Math.max(30, 4200 / s.trace.length)); };
+  legend($('gLeg'), CATS); select(cur);
+  if (io) { var auto = new IntersectionObserver(function (es) { if (es[0].isIntersecting && !RM) { $('gPlay').click(); auto.disconnect(); } }, { threshold: .5 }); auto.observe(nodes); }
+})();
+
+// ---------------------------------------------------------------- 04 area chart
+var aStage = '3';
+function drawArea() {
+  var s = ST[aStage], tr = s.trace, W = 1000, H = 300, L = 56, R = 16, T = 26, B = 34;
+  var top = 0; ['0', '1', '2', '3'].forEach(function (k) { ST[k].trace.forEach(function (e) { top = Math.max(top, sum(e.v)); }); });
+  var fx = function (i) { return L + i / Math.max(1, tr.length - 1) * (W - L - R); }, fy = function (v) { return H - B - v / top * (H - T - B); };
+  var sv = '', mib = 1048576;
+  for (var y = 0; y <= top / mib; y += 5) sv += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + fy(y * mib) + '" y2="' + fy(y * mib) + '" stroke="var(--rule)"/><text x="' + (L - 6) + '" y="' + (fy(y * mib) + 3) + '" text-anchor="end">' + y + ' MiB</text>';
+  var base = tr.map(function () { return 0; });
+  CATS.forEach(function (c, j) {
+    var up = tr.map(function (e, i) { return base[i] + e.v[j]; });
+    if (sum(tr.map(function (e) { return e.v[j]; })) > 0) {
+      var d = 'M' + fx(0) + ',' + fy(base[0]);
+      for (var i = 0; i < tr.length; i++) { d += 'L' + fx(i) + ',' + fy(up[i]); if (i < tr.length - 1) d += 'L' + fx(i + 1) + ',' + fy(up[i]); }
+      for (i = tr.length - 1; i >= 0; i--) { d += 'L' + fx(i + 1 > tr.length - 1 ? i : i + 1) + ',' + fy(base[i]); d += 'L' + fx(i) + ',' + fy(base[i]); }
+      sv += '<path d="' + d + 'Z" fill="var(--c-' + c + ')" opacity=".95"><title>' + LAB[c] + '</title></path>';
+    }
+    base = up;
+  });
+  var lastP = '';
+  tr.forEach(function (e, i) { var p = e.p.split(' ')[0]; if (p !== lastP) { sv += '<line x1="' + fx(i) + '" x2="' + fx(i) + '" y1="' + T + '" y2="' + (H - B) + '" stroke="var(--panel)" stroke-width="1.5"/><text x="' + (fx(i) + 4) + '" y="' + (T - 8) + '" class="t-ink2" style="font-weight:600">' + ({ fwd: 'forward', bwd: 'backward', optimizer: 'optimizer', weights: 'weights', idle: '' }[p] || p) + '</text>'; lastP = p; } });
+  var pk = 0, pi = 0; tr.forEach(function (e, i) { var t = sum(e.v); if (t > pk) { pk = t; pi = i; } });
+  sv += '<circle cx="' + fx(pi) + '" cy="' + fy(pk) + '" r="5" fill="var(--red)"/><text x="' + (fx(pi) + 9) + '" y="' + (fy(pk) - 6) + '" style="fill:var(--red);font-weight:600">peak ' + fb(pk) + '</text>';
+  sv += '<text x="' + ((L + W) / 2) + '" y="' + (H - 6) + '" text-anchor="middle" class="t-ink2">every allocation and free on GPU 0 during one step →</text>';
+  $('areaChart').innerHTML = sv;
+  var st = sum(s.steady[0]);
+  $('aNote').textContent = 'steady ' + fb(st) + ' · peak ' + fb(s.peak) + ' (' + (s.peak / st).toFixed(1) + '×) during ' + s.peak_phase;
+}
+seg($('aStage'), stageItems, aStage, function (k) { aStage = k; drawArea(); });
+legend($('aLeg'), CATS);
+(function () {
+  var r = ['0', '1', '2', '3'].map(function (k) { var s = ST[k]; return SNAME[+k] + ' ' + fb(sum(s.steady[0])) + ' → ' + fb(s.peak); });
+  $('stepAns').innerHTML = 'Between steps, GPU 0 holds: ' + r.join(' · ') + ' at the peak. The peak is set by <b>activations</b>, which no ZeRO stage touches. ZeRO-2 adds a gradient bucket that lives for one layer\'s backward; ZeRO-3 adds one gathered layer that lives for one layer\'s compute. On a real card this is the number to budget for, and the reason the lesson says to leave room for activations before trusting the table.';
+})();
+
+// ---------------------------------------------------------------- 05 wire
+var WC = { 'grad reduce-scatter': 'var(--z1)', 'grad all-gather': 'var(--c-grad_bucket)', 'weight all-gather': 'var(--z2)', 'weight all-gather (fwd)': 'var(--z2)', 'weight all-gather (bwd)': 'var(--c-gathered)', 'grad-norm all-gather': 'var(--ink)' };
+function drawWire() {
+  var h = '', used = {};
+  ['0', '1', '2', '3'].forEach(function (k) {
+    var s = ST[k], per = {}; Object.keys(s.sent).forEach(function (key) { var p = key.split('|'); if (p[1] === 'pcie') return; per[p[0]] = (per[p[0]] || 0) + s.sent[key]; });
+    var tot = 0, bars = '';
+    Object.keys(WC).forEach(function (lab) { if (!per[lab]) return; var w = per[lab] / s.P; tot += w; used[lab] = 1; bars += '<i style="width:' + (w / 3.2 * 100) + '%;background:' + WC[lab] + '" title="' + lab + ': ' + w.toFixed(3) + ' P"></i>'; });
+    h += '<div class="hbar"><span style="color:var(' + SVAR[+k] + ');font-weight:600">' + SNAME[+k] + '</span><div class="tr grow">' + bars + '</div><span class="v">' + tot.toFixed(3) + ' P</span></div>';
+  });
+  $('wireBars').innerHTML = h;
+  $('wireLeg').innerHTML = Object.keys(used).map(function (l) { return '<span style="--c:' + WC[l] + '">' + l + '</span>'; }).join('');
+  var bars = $('wireBars').querySelectorAll('.tr i'); Array.prototype.forEach.call(bars, function (b) { var w = b.style.width; if (!RM) { b.style.width = '0'; requestAnimationFrame(function () { requestAnimationFrame(function () { b.style.width = w; }); }); } });
+}
+
+// ---------------------------------------------------------------- 06 clock
+var cS = '3', cCard = 'H100', cOv = '1';
+var LANE = { compute: 0, idle: 0, ag: 1, rs: 2, pcie: 3 };
+function evc(s, l) { if (s === 'idle') return 'var(--idle)'; if (s === 'compute') return l.indexOf('optimizer') === 0 ? 'var(--ddp)' : l.indexOf('fwd') === 0 ? 'var(--fwd)' : 'var(--bwd)'; if (s === 'pcie') return 'var(--off)'; return s === 'ag' ? 'var(--z2)' : 'var(--z1)'; }
+function drawGantt() {
+  var key = cCard + '|' + cS + '|' + cOv, t = (D.tl || {})[key]; if (!t) return;
+  var maxT = 0; Object.keys(D.tl).forEach(function (k) { if (k.indexOf(cCard) === 0) maxT = Math.max(maxT, D.tl[k].step); });
+  var W = 1000, H = 200, L = 110, R = 70, fx = function (v) { return L + v / (maxT * 1.04) * (W - L - R); };
+  var sv = '', names = ['compute', 'all-gather', 'reduce-scatter'];
+  names.forEach(function (n, i) { var y = 22 + i * 52; sv += '<text x="' + (L - 10) + '" y="' + (y + 21) + '" text-anchor="end" class="t-ink2" style="font-size:12px">' + n + '</text><line x1="' + L + '" x2="' + (W - R) + '" y1="' + (y + 40) + '" y2="' + (y + 40) + '" stroke="var(--rule)"/>'; });
+  for (var g = 0; g <= maxT * 1.04; g += 50) sv += '<text x="' + fx(g) + '" y="' + (H - 2) + '" text-anchor="middle">' + g + ' µs</text>';
+  t.events.forEach(function (e, i) { var lane = LANE[e[0]]; if (lane > 2) return; var y = 22 + lane * 52, w = Math.max(.9, fx(e[3]) - fx(e[2]));
+    sv += '<rect x="' + fx(e[2]).toFixed(1) + '" y="' + y + '" width="' + w.toFixed(1) + '" height="32" rx="3" fill="' + evc(e[0], e[1]) + '" style="' + (RM ? '' : 'opacity:0;animation:pop .4s ease forwards;animation-delay:' + Math.min(900, i * 8) + 'ms') + '"><title>' + e[1] + ' · ' + (e[3] - e[2]).toFixed(2) + ' µs</title></rect>'; });
+  sv += '<line x1="' + fx(t.step) + '" x2="' + fx(t.step) + '" y1="10" y2="' + (H - 18) + '" stroke="var(--ink)" stroke-width="1.6"/><text x="' + (fx(t.step) + 6) + '" y="18" class="t-ink" style="font-weight:600;font-size:12px">' + t.step.toFixed(0) + ' µs</text>';
+  $('gantt').innerHTML = '<style>@keyframes pop{to{opacity:1}}</style>' + sv;
+  var row = (D.timing || []).filter(function (r) { return r.card === cCard && r.arrangement === SNAME[+cS] && String(+r.overlap) === cOv; })[0];
+  $('cStep').textContent = t.step.toFixed(1) + ' µs'; $('cComp').textContent = t.compute.toFixed(1) + ' µs';
+  $('cNet').textContent = row ? Math.max(0, row['network adds µs']).toFixed(1) + ' µs' : '–';
+  $('cRatio').textContent = row ? (Math.max(0, row['network / compute']) * 100).toFixed(1) + '%' : '–';
+}
+seg($('cStage'), stageItems, cS, function (v) { cS = v; drawGantt(); });
+seg($('cCard'), [['H100', 'H100'], ['B200', 'B200']], cCard, function (v) { cCard = v; drawGantt(); });
+seg($('cOv'), [['0', 'blocking'], ['1', 'overlapped']], cOv, function (v) { cOv = v; drawGantt(); });
+if (h100 && b200) $('clockVerdict').textContent = 'DDP blocking: ' + (h100['network / compute'] * 100).toFixed(1) + '% (H100) · ' + (b200['network / compute'] * 100).toFixed(1) + '% (B200) = lesson × 31/32';
+function drawRatios() {
+  var h = '', rows = D.timing || [], mx = 0; rows.forEach(function (r) { mx = Math.max(mx, r['network / compute']); });
+  ['H100', 'B200'].forEach(function (card) {
+    h += '<div class="note" style="margin:10px 0 2px">' + card + ' · light = collectives blocking · solid = overlapped</div>';
+    [0, 1, 2, 3].forEach(function (s) {
+      var b = rows.filter(function (r) { return r.card === card && r.arrangement === SNAME[s]; }), off = b.filter(function (r) { return !r.overlap; })[0], on = b.filter(function (r) { return r.overlap; })[0];
+      if (!off || !on) return;
+      h += '<div class="hbar"><span style="color:var(' + SVAR[s] + ');font-weight:600">' + SNAME[s] + '</span><div class="tr" style="display:block;position:relative"><i style="position:absolute;left:0;top:0;bottom:0;width:' + (Math.max(0, off['network / compute']) / mx * 100) + '%;background:var(' + SVAR[s] + ');opacity:.28"></i><i style="position:absolute;left:0;top:0;bottom:0;width:' + (Math.max(0, on['network / compute']) / mx * 100) + '%;background:var(' + SVAR[s] + ')"></i></div><span class="v">' + (off['network / compute'] * 100).toFixed(0) + '% → ' + (Math.max(0, on['network / compute']) * 100).toFixed(0) + '%</span></div>';
+    });
+  });
+  $('ratioBars').innerHTML = h;
+  var tp = D.topology || [], layouts = []; tp.forEach(function (r) { if (layouts.indexOf(r.layout) < 0) layouts.push(r.layout); });
+  var m2 = 0; tp.forEach(function (r) { m2 = Math.max(m2, r['network / compute']); });
+  $('topoBars').innerHTML = layouts.map(function (l) {
+    return '<div class="note" style="margin:10px 0 2px">' + l + '</div>' + [0, 1, 2, 3].map(function (s) { var r = tp.filter(function (x) { return x.layout === l && x.arrangement === SNAME[s]; })[0]; if (!r) return '';
+      return '<div class="hbar"><span style="color:var(' + SVAR[s] + ');font-weight:600">' + SNAME[s] + '</span><div class="tr"><i style="width:' + (r['network / compute'] / m2 * 100) + '%;background:var(' + SVAR[s] + ')"></i></div><span class="v">' + (r['network / compute'] * 100).toFixed(1) + '%</span></div>'; }).join('');
+  }).join('');
+}
+
+// ---------------------------------------------------------------- 07 wall
+var CARDS = [['24 GB', 24e9], ['40 GB', 40e9], ['80 GB · H100', 80e9], ['192 GB · B200', 192e9]];
+function drawWall() {
+  var psi = Math.pow(10, +$('wPsi').value) * 1e9, n = Math.pow(2, +$('wN').value), card = CARDS[+$('wCard').value], cg = card[1] / 1073741824;
+  $('wPsiLab').textContent = (psi / 1e9 >= 10 ? (psi / 1e9).toFixed(0) : (psi / 1e9).toFixed(1)) + 'B parameters'; $('wNLab').textContent = n; $('wCardLab').textContent = card[0] + ' = ' + cg.toFixed(1) + ' GiB';
+  var vals = [0, 1, 2, 3].map(function (s) { return psi * bpp(s, n) / 1073741824; }), mx = Math.max(cg * 1.5, Math.max.apply(null, vals));
+  $('wallBars').innerHTML = vals.map(function (v, s) {
+    var ok = v <= cg, ff = 0; for (var k = 0; k <= 14; k++) if (psi * bpp(s, Math.pow(2, k)) / 1073741824 <= cg) { ff = Math.pow(2, k); break; }
+    return '<div class="wallrow"><b style="color:var(' + SVAR[s] + ')">' + SNAME[s] + '</b><div class="tr"><div class="fill" style="width:' + Math.min(100, v / mx * 100) + '%;background:var(' + SVAR[s] + ');opacity:' + (ok ? 1 : .4) + '"></div><div class="cardline" style="left:' + (cg / mx * 100) + '%"></div></div><span class="v" style="text-align:right;font-weight:600">' + (v >= 100 ? v.toFixed(0) : v.toFixed(1)) + ' GiB</span></div>' +
+      '<div class="fitrow"><span class="fit" style="background:' + (ok ? 'var(--z3)' : 'var(--red)') + '">' + (ok ? 'fits' : 'does not fit') + '</span><span class="note">' + (ff ? 'first fits at ' + ff + ' GPUs' : 'never fits: its replicated part alone exceeds the card') + '</span></div>';
+  }).join('');
+  drawLadder(psi, n, cg);
+}
+function drawLadder(psi, nSel, cg) {
+  var Ns = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024], ser = [], lad = D.ladder || {};
+  var ymin = Math.max(.05, psi * 16 / 1024 / 1073741824 * .7), ymax = psi * 16 / 1073741824 * 1.6;
+  [0, 1, 2, 3].forEach(function (s) {
+    ser.push({ pts: Ns.map(function (n) { return [n, psi * bpp(s, n) / 1073741824]; }), c: 'var(' + SVAR[s] + ')', w: 2.2, label: SNAME[s] });
+    var m = lad[s] || {}; ser.push({ pts: Object.keys(m).map(function (n) { return [+n, psi * m[n] / 1073741824]; }), c: 'var(' + SVAR[s] + ')', line: false, dots: true, r: 3.5, name: SNAME[s] + ' measured' });
+  });
+  chart($('ladder'), { W: 520, H: 320, R: 64, x: [1, 1024], y: [ymin, ymax], xlog: true, ylog: true, xt: [1, 4, 16, 64, 256, 1024], yt: pow10ticks(ymin, ymax), yf: function (v) { return v >= 1 ? v.toFixed(0) : v; }, xl: 'GPUs', yl: 'GiB per GPU', series: ser,
+    extra: function (fx, fy) { var y = fy(cg); return '<line x1="52" x2="456" y1="' + y + '" y2="' + y + '" stroke="var(--red)" stroke-width="1.6" stroke-dasharray="6 4"/><text x="58" y="' + (y - 6) + '" style="fill:var(--red);font-weight:600">card ' + cg.toFixed(1) + ' GiB</text><line x1="' + fx(nSel) + '" x2="' + fx(nSel) + '" y1="14" y2="284" stroke="var(--ink)" stroke-opacity=".35" stroke-dasharray="3 3"/>'; } });
+}
+['wPsi', 'wN', 'wCard'].forEach(function (id) { $(id).oninput = drawWall; });
+
+// ---------------------------------------------------------------- 08 real
+var RC = { ddp: 'var(--ddp)', zero1: 'var(--z1)', fsdp2_zero2: 'var(--z2)', fsdp2_zero3: 'var(--z3)' };
+var RL = { ddp: 'DDP', zero1: 'ZeroRedundancyOptimizer', fsdp2_zero2: 'FSDP2 · no reshard', fsdp2_zero3: 'FSDP2 · ZeRO-3' };
+var iS = 'zero1';
+function drawReal() {
+  var sim = D.sim32_losses || [], ser = [], keys = Object.keys(rd);
+  if (!keys.length) { $('realAns').textContent = 'results/real_dist.json was not available when this page was exported.'; return; }
+  keys.forEach(function (k, j) { ser.push({ pts: rd[k].losses.map(function (v, i) { return [i, Math.max(1e-9, Math.abs(v - sim[i]))]; }), c: RC[k], w: 2.2 - j * .3, draw: true }); });
+  var dmax = 1e-12; ser.forEach(function (se) { se.pts.forEach(function (p) { dmax = Math.max(dmax, p[1]); }); });
+  var ytop = Math.pow(10, Math.ceil(Math.log10(dmax)) + 1), ybot = ytop / 1e5;
+  ser.forEach(function (se) { se.pts = se.pts.map(function (p) { return [p[0], Math.max(ybot, p[1])]; }); });
+  chart($('realLoss'), { x: [0, sim.length - 1], y: [ybot, ytop], ylog: true, xt: [0, 10, 20, 29], yt: pow10ticks(ybot, ytop), yf: function (v) { return v.toExponential(0); }, xl: 'step', yl: '|Δ loss|', series: ser,
+    extra: function (fx, fy) { return '<text x="' + fx(sim.length - 1) + '" y="' + (fy(ytop) + 12) + '" text-anchor="end" class="t-ink2">fp32 rounding, nothing more</text>'; } });
+  $('realLeg').innerHTML = keys.map(function (k) { return '<span style="--c:' + RC[k] + '">' + RL[k] + '</span>'; }).join('');
+  $('tReal').innerHTML = '<thead><tr><th>PyTorch</th><th>params</th><th>grads</th><th>AdamW</th><th>B/param</th><th>sends / P</th><th>max |Δ| vs mine</th></tr></thead><tbody>' + real.map(function (r) {
+    return '<tr><td style="color:' + RC[r.strategy] + ';font-weight:600">' + RL[r.strategy].replace('ZeroRedundancyOptimizer', 'ZeRO-1 (ZRO)') + '</td><td>' + r['params B/p'].toFixed(3) + '</td><td>' + r['grads B/p'].toFixed(3) + '</td><td>' + r['AdamW B/p'].toFixed(3) + '</td><td><b>' + r['total B/p (rank 0)'].toFixed(3) + '</b></td><td>' + r['ring bytes / rank / P'].toFixed(2) + '</td><td>' + r['max |loss − my sim|'].toExponential(1) + '</td></tr>'; }).join('') + '</tbody>';
+  drawImb();
+  var rows = (rd.fsdp2_zero3 || {}).tok_rows || [];
+  chart($('rows'), { W: 520, H: 220, x: [-.5, rows.length - .5], y: [0, 3.6], xt: [0, 8, 16, 24, 31], yt: [0, 1, 2, 3], xl: 'rank', yl: 'rows held', series: [],
+    extra: function (fx, fy) { var bw = (fx(1) - fx(0)) * .78; return rows.map(function (v, i) { return '<rect x="' + (fx(i) - bw / 2) + '" y="' + fy(v) + '" width="' + bw + '" height="' + (fy(0) - fy(v)) + '" rx="2" fill="' + (v ? 'var(--z2)' : 'var(--red)') + '"><title>rank ' + i + ': ' + v + ' rows</title></rect>' + (v ? '' : '<circle cx="' + fx(i) + '" cy="' + (fy(0) - 4) + '" r="2.5" fill="var(--red)"/>'); }).join(''); } });
+  var z = realRow('zero1'), f = realRow('fsdp2_zero3'), d = realRow('ddp');
+  $('realAns').innerHTML = 'All four trained <b>my</b> model: final loss ' + (d ? d['final loss'].toFixed(4) : '') + ', and each stays within ' + Math.max.apply(null, real.map(function (r) { return r['max |loss − my sim|']; })).toExponential(1) + ' of my simulator at every step. Memory matches the theory for fp32 (16 → 8 + 8/N → 16/N). Two things the lesson\'s table does not say: <b>PyTorch\'s ZeroRedundancyOptimizer sends ' + (z ? z['ring bytes / rank / P'].toFixed(2) : '?') + ' P per step</b>, not 2P, because it keeps DDP\'s full all-reduce and then broadcasts the updated parameters; and it assigns <b>whole tensors</b> to ranks, so the largest rank holds ' + (z ? z['AdamW state: max/min over ranks'].toFixed(1) : '?') + '× the optimizer state of the smallest. FSDP2 shards every tensor along dim 0, which is far more even (' + (f ? f['AdamW state: max/min over ranks'].toFixed(2) : '?') + '×) but leaves ' + emptyRanks + ' of 32 ranks with none of the embedding. The rank that crashes first is the one holding the most, which is what the instructor described in class.';
+}
+function drawImb() {
+  var o = (rd[iS] || {}).opt || [], psi = S.psi || 1, v = o.map(function (x) { return x / psi; }), mx = Math.max.apply(null, v.concat([.3]));
+  chart($('imb'), { W: 520, H: 220, x: [-.5, v.length - .5], y: [0, mx * 1.12], xt: [0, 8, 16, 24, 31], yt: [0, .25, .5, .75, 1, 1.5, 2].filter(function (t) { return t <= mx * 1.12; }), xl: 'rank', yl: 'AdamW B / param', series: [],
+    extra: function (fx, fy) { var bw = (fx(1) - fx(0)) * .78, s = v.map(function (x, i) { return '<rect x="' + (fx(i) - bw / 2) + '" y="' + fy(x) + '" width="' + bw + '" height="' + (fy(0) - fy(x)) + '" rx="2" fill="' + RC[iS] + '" opacity="' + (x === Math.max.apply(null, v) ? 1 : .55) + '"><title>rank ' + i + ': ' + x.toFixed(3) + ' B/param</title></rect>'; }).join('');
+      return s + '<line x1="52" x2="504" y1="' + fy(.25) + '" y2="' + fy(.25) + '" stroke="var(--ink)" stroke-dasharray="5 4"/><text x="500" y="' + (fy(.25) - 5) + '" text-anchor="end" class="t-ink2">ideal 8/32 = 0.25</text>'; } });
+  var mn = Math.min.apply(null, v.filter(function (x) { return x > 0; })), mxv = Math.max.apply(null, v);
+  $('imbNote').textContent = RL[iS] + ': max ' + mxv.toFixed(3) + ' · min ' + mn.toFixed(3) + ' B/param (' + (mxv / mn).toFixed(2) + '×)';
+}
+seg($('iStrat'), [['zero1', 'ZeroRedundancyOptimizer', 'var(--z1)'], ['fsdp2_zero3', 'FSDP2', 'var(--z3)']], iS, function (k) { iS = k; drawImb(); });
+
+// ---------------------------------------------------------------- 09 pros/cons
+(function pcs() {
+  var P = [
+    ['0', 'replicate everything', ['simplest; one all-reduce per bucket', 'no gather before any layer', '2P per step'], ['16 B/param on every card: 15/16 of the cluster\'s memory is copies', 'every GPU runs the same Adam update', 'fits only if model + Adam fit one card'], 'models that fit with room to spare'],
+    ['1', 'shard the optimizer', ['12 of 16 bytes sharded for free: same 2P', 'Adam work per GPU ÷ N', 'drop-in (DeepSpeed stage 1)'], ['bf16 weights + grads still 4 B/param everywhere: a floor no N can lower', 'PyTorch\'s ZeroRedundancyOptimizer sends 3P and shards unevenly'], 'almost always better than DDP'],
+    ['2', 'shard gradients too', ['2 + 14/N: down to 2 B/param floor', 'still 2P: reduce-scatter per bucket in backward', 'V4 ran this on 8 GPUs'], ['bf16 weights replicated: 30B needs ≥ 32 GPUs', 'a transient gradient bucket on top of the peak', 'bucket size needs tuning'], 'weights fit, Adam does not'],
+    ['3', 'shard the weights', ['16/N: no floor, 30B fits on 8 GPUs', 'scales memory with the cluster', 'FSDP2 is built into PyTorch'], ['3P: +50% traffic, two gathers per layer per step', 'latency-bound on small layers; needs prefetch', 'uneven dim-0 shards (FSDP2) can OOM one rank'], 'the model itself does not fit']];
+  $('pcs').innerHTML = P.map(function (p) { var k = p[0];
+    return '<div class="card pc reveal" style="--c:var(' + SVAR[+k] + ')"><span class="k">' + SNAME[+k] + ' · ' + p[1] + '</span><div style="display:flex;gap:14px;align-items:baseline;flex-wrap:wrap"><span class="bigsum" style="font-size:1.8rem;color:var(' + SVAR[+k] + ')">' + ST[k].bpp.toFixed(2) + '</span><span class="note">B/param at N=' + N + ' · ' + (+k === 3 ? '3P' : '2P') + '</span></div><div class="grid2" style="gap:6px"><div><b style="font-size:.8rem">pros</b><ul>' + p[2].map(function (x) { return '<li>' + x + '</li>'; }).join('') + '</ul></div><div><b style="font-size:.8rem">cons</b><ul>' + p[3].map(function (x) { return '<li>' + x + '</li>'; }).join('') + '</ul></div></div><span class="note">use it when: ' + p[4] + '</span></div>'; }).join('');
+  Array.prototype.forEach.call(document.querySelectorAll('#pcs .reveal'), function (el) { io ? io.observe(el) : el.classList.add('in'); });
+})();
+
+function redrawAll() { drawLoss(); drawSweep(); drawArea(); drawWire(); drawGantt(); drawRatios(); drawWall(); drawReal(); }
+redrawAll();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+data/
+*.pt
+.venv/
+.DS_Store
+*.quick.ipynb
+results/*.quick.json
+*.executed.ipynb
